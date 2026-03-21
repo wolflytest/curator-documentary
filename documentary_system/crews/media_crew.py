@@ -9,6 +9,7 @@ from crewai import Agent, Crew, Process, Task
 from documentary_system.llm_config import get_llm
 from documentary_system.state.documentary_state import DocumentaryState, SceneState
 from documentary_system.tools.gemini_vision_tool import GeminiVisionTool
+from documentary_system.tools.media_download_tool import MediaDownloadTool
 from documentary_system.tools.pexels_tool import PexelsTool
 from documentary_system.tools.wikimedia_tool import WikimediaTool
 from documentary_system.tools.ytcc_tool import YouTubeCCTool
@@ -22,8 +23,8 @@ def create_media_crew(
 ) -> Crew:
     """Bir sahne için medya seçim ekibini oluştur."""
     llm = get_llm()
-    search_tools = [WikimediaTool(), PexelsTool(), YouTubeCCTool()]
-    vision_tools = [GeminiVisionTool()]
+    search_tools = [WikimediaTool(), PexelsTool(), YouTubeCCTool(), MediaDownloadTool()]
+    vision_tools = [GeminiVisionTool(), MediaDownloadTool()]
 
     # AGENT 1: Arşiv Araştırmacısı
     searcher = Agent(
@@ -86,36 +87,51 @@ def create_media_crew(
 
     used_hashes = list(state.used_media_hashes)[:10]
 
-    # TASK 1: Medya Arama
+    # TASK 1: Medya Arama + İndirme
     search_task = Task(
         description=(
-            f"Sahne {scene.index} için medya ara:\n"
+            f"Sahne {scene.index} için medya ara ve indir:\n"
             f"Anlatım: {scene.narration[:150]}\n"
             f"Anahtar kelimeler: {scene.search_keywords}\n"
             f"Görsel açıklama: {scene.visual_description}\n"
             f"Duygu tonu: {scene.mood}\n\n"
             f"Kullanılmış medya (bunları seçme): {used_hashes}\n\n"
-            "WikimediaTool, PexelsTool ve YouTubeCCTool ile arama yap. "
-            "En az 5 farklı aday bul ve URL'leriyle listele."
+            "ADIMLAR:\n"
+            "1. WikimediaTool ve PexelsTool ile arama yap, en az 5 aday bul\n"
+            "2. YouTubeCCTool ile 1-2 video aday ara\n"
+            "3. Her adayın download_url'ini MediaDownloadTool ile indir\n"
+            "   - MediaDownloadTool input: {\"url\": \"<download_url>\", \"media_type\": \"photo|video\"}\n"
+            "   - MediaDownloadTool local_path döndürür\n"
+            "4. Her aday için: başlık, kaynak, download_url, local_path, tip bilgisini listele\n\n"
+            "ÖNEMLİ: GeminiVisionTool local_path ister, URL değil. "
+            "İndirmeden analiz yapılamaz."
         ),
-        expected_output="En az 5 medya adayının listesi (başlık, URL, kaynak, tip bilgisiyle).",
+        expected_output=(
+            "En az 5 medya adayı listesi. Her adayda: "
+            "başlık, kaynak (wikimedia/pexels/ytcc), download_url, local_path, media_type."
+        ),
         agent=searcher,
     )
 
-    # TASK 2: Görsel Analiz
+    # TASK 2: Görsel Analiz (local_path ile)
     analyze_task = Task(
         description=(
             f"Sahne {scene.index} için bulunan medya adaylarını analiz et:\n"
             f"Sahne metni: {scene.narration[:100]}\n"
             f"Aranan: {scene.visual_description}\n\n"
             "Her aday için GeminiVisionTool ile analiz yap:\n"
+            "- GeminiVisionTool input: {\"image_path\": \"<local_path>\", "
+            "\"scene_text\": \"...\", \"keywords\": [...]}\n"
+            "- image_path: searcher'ın döndürdüğü local_path (NOT: URL değil!)\n"
+            "- Eğer bir adayın local_path'i boşsa veya indirilemişse atla\n\n"
+            "Skorlar:\n"
             "- Alakalılık skoru (1-10)\n"
             "- Kalite skoru (1-10)\n"
             "- Watermark var mı?\n"
             "- Kullanılabilir mi?\n\n"
             "Tüm adayları karşılaştır, en yüksek toplam skoru bul."
         ),
-        expected_output="Her adayın analiz sonucu ve en yüksek skorlu adayın belirlenmesi.",
+        expected_output="Her adayın analiz sonucu (local_path ile) ve en yüksek skorlu adayın belirlenmesi.",
         agent=analyzer,
         context=[search_task],
     )
@@ -124,7 +140,8 @@ def create_media_crew(
     consistency_task = Task(
         description=(
             f"Sahne {scene.index} için analyzer'ın seçtiği en iyi medyayı "
-            f"önceki sahnelerle tutarlılık açısından kontrol et.\n\n"
+            f"önceki sahnelerle tutarlılık açısından kontrol et.\n"
+            f"Seçilen medyanın local_path'i üzerinden GeminiVisionTool ile ek analiz yapabilirsin.\n\n"
             f"Önceki görsel stil:\n{state.get_visual_context_summary()}\n\n"
             "Kontrol et:\n"
             "- Renk tonu tutarlılığı\n"
