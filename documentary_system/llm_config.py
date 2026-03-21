@@ -23,7 +23,7 @@ def get_local_llm() -> LLM:
 def get_fallback_llm() -> LLM:
     """Gemini 2.0 Flash — Ollama çalışmazsa kullanılır."""
     return LLM(
-        model="gemini/gemini-3.1-flash-lite",
+        model="gemini/gemini-3.1-flash-lite-preview",
         api_key=os.environ.get("GEMINI_API_KEY"),
         temperature=0.7,
     )
