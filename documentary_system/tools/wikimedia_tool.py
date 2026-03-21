@@ -26,10 +26,13 @@ class WikimediaTool(BaseTool):
         """Wikimedia Commons'ta görsel ara, CC lisanslı yüksek çözünürlüklü sonuçları döndür."""
         try:
             data = json.loads(input_str)
-            keyword = data.get("keyword", "")
-            limit = min(int(data.get("limit", 5)), 20)
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.error("WikimediaTool geçersiz input: %s", exc)
+        except (json.JSONDecodeError, ValueError):
+            data = {"keyword": input_str.strip(), "limit": 5}
+
+        keyword = data.get("keyword", "")
+        limit = min(int(data.get("limit", 5)), 20)
+
+        if not keyword:
             return json.dumps([])
 
         params = {

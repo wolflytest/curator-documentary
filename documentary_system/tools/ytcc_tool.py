@@ -27,10 +27,13 @@ class YouTubeCCTool(BaseTool):
         """YouTube CC video ara ve indir."""
         try:
             data = json.loads(input_str)
-            keyword = data.get("keyword", "")
-            limit = min(int(data.get("limit", 3)), 5)
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.error("YouTubeCCTool geçersiz input: %s", exc)
+        except (json.JSONDecodeError, ValueError):
+            data = {"keyword": input_str.strip(), "limit": 3}
+
+        keyword = data.get("keyword", "")
+        limit = min(int(data.get("limit", 3)), 5)
+
+        if not keyword:
             return json.dumps([])
 
         def cc_filter(info: dict) -> str | None:

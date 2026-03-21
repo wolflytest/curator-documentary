@@ -27,11 +27,14 @@ class PexelsTool(BaseTool):
         """Pexels API ile fotoğraf veya video ara."""
         try:
             data = json.loads(input_str)
-            keyword = data.get("keyword", "")
-            media_type = data.get("type", "photo")
-            limit = min(int(data.get("limit", 5)), 20)
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.error("PexelsTool geçersiz input: %s", exc)
+        except (json.JSONDecodeError, ValueError):
+            data = {"keyword": input_str.strip(), "limit": 5}
+
+        keyword = data.get("keyword", "")
+        media_type = data.get("type", "photo")
+        limit = min(int(data.get("limit", 5)), 20)
+
+        if not keyword:
             return json.dumps([])
 
         headers = {"Authorization": PEXELS_API_KEY}
