@@ -230,6 +230,9 @@ def run_documentary(topic: str, target_duration: int = 600) -> dict:
         # 2. Her sahne için medya
         _update_status(state, "searching")
         for scene in state.scenes:
+            if scene.index > 0:
+                log.info("[#%d] Rate limit önlemi: 65 saniye bekleniyor...", doc_id)
+                time.sleep(65)
             log.info("[#%d] Sahne %d medya aranıyor...", doc_id, scene.index)
             try:
                 media_crew = create_media_crew(scene, state)
@@ -269,10 +272,10 @@ def run_documentary(topic: str, target_duration: int = 600) -> dict:
             else:
                 log.warning("[#%d] Sahne %d TTS başarısız.", doc_id, scene.index)
 
-            # FFmpeg (medya varsa)
-            if scene.approved_media:
+            # FFmpeg (medya varsa ve local_path dolu ise)
+            clip_output = work_dir / f"clip_{scene.index:03d}.mp4"
+            if scene.approved_media and scene.approved_media.get("local_path"):
                 media = scene.approved_media
-                clip_output = work_dir / f"clip_{scene.index:03d}.mp4"
                 ffmpeg_type = "ken_burns" if media.get("media_type") == "photo" else "clip"
 
                 clip_result = json.loads(ffmpeg_tool._run(json.dumps({
@@ -289,6 +292,27 @@ def run_documentary(topic: str, target_duration: int = 600) -> dict:
                     log.info("[#%d] Sahne %d klip hazır.", doc_id, scene.index)
                 else:
                     log.warning("[#%d] Sahne %d FFmpeg başarısız.", doc_id, scene.index)
+            else:
+                log.warning(
+                    "[#%d] Sahne %d için medya yok, siyah arka plan oluşturuluyor...",
+                    doc_id, scene.index,
+                )
+                try:
+                    subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-f", "lavfi",
+                            "-i", f"color=black:size=1920x1080:duration={scene.duration_sec}:rate=25",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            str(clip_output),
+                        ],
+                        check=True, capture_output=True,
+                    )
+                    scene.final_clip_path = str(clip_output)
+                except subprocess.CalledProcessError as exc:
+                    log.error(
+                        "[#%d] Sahne %d siyah klip hatası: %s",
+                        doc_id, scene.index, exc.stderr.decode(errors="replace")[:300],
+                    )
 
         # 4. Sahneleri birleştir
         output_path = _concat_scenes(state, work_dir)
