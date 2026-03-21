@@ -32,7 +32,7 @@ SUMMARY_MINUTE = 0
 COOKIE_FILE = Path("/home/ubuntu/curator/instagram_cookies.txt")
 
 # Gemini model sıralaması: önce primary denenir, 404/429 alınırsa fallback
-GEMINI_MODEL_PRIMARY  = "gemini-3.1-flash-lite-preview"
+GEMINI_MODEL_PRIMARY  = "gemini-2.5-flash-lite"
 GEMINI_MODEL_FALLBACK = "gemini-2.5-flash-lite"
 
 # Sohbet için DB'den kaç kayıt çekileceği
