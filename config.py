@@ -12,6 +12,7 @@ TELEGRAM_BOT_TOKEN: str = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_USER_ID: int = int(os.environ["TELEGRAM_USER_ID"])
 GROQ_API_KEY: str = os.environ["GROQ_API_KEY"]
 GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
+PEXELS_API_KEY: str = os.environ["PEXELS_API_KEY"]
 
 # Geçici dosyalar için dizin (700: sadece bot process erişebilir)
 TMP_DIR = Path("/tmp/curator")

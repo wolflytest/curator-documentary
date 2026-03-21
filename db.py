@@ -41,6 +41,33 @@ def init_db() -> None:
                 log.info("Migration: '%s' sütunu eklendi.", col)
             except sqlite3.OperationalError:
                 pass  # Sütun zaten var
+        # Belgesel tabloları
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS documentaries (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic       TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                script_json TEXT,
+                output_path TEXT,
+                youtube_url TEXT,
+                error_msg   TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS documentary_media (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                documentary_id  INTEGER NOT NULL,
+                scene_index     INTEGER NOT NULL,
+                source          TEXT NOT NULL,
+                source_url      TEXT NOT NULL,
+                local_path      TEXT,
+                relevance_score REAL,
+                used            INTEGER DEFAULT 0,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            )
+        """)
         conn.commit()
     log.info("Veritabanı hazır: %s", DB_PATH)
 
@@ -127,6 +154,86 @@ def delete_content(content_id: int) -> bool:
     else:
         log.warning("Silinecek kayıt bulunamadı: id=%d", content_id)
     return deleted
+
+
+def create_documentary(topic: str) -> int:
+    """Yeni belgesel kaydı oluştur, id döndür."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO documentaries (topic, status) VALUES (?, 'pending')",
+            (topic,),
+        )
+        conn.commit()
+        log.info("Belgesel oluşturuldu: id=%d, konu='%s'", cur.lastrowid, topic)
+        return cur.lastrowid
+
+
+def update_documentary_status(
+    doc_id: int,
+    status: str,
+    **kwargs: str,
+) -> None:
+    """Belgesel durumunu ve opsiyonel alanları güncelle."""
+    allowed = {"script_json", "output_path", "youtube_url", "error_msg"}
+    updates = {"status": status, "updated_at": "datetime('now','localtime')"}
+    params = []
+    set_parts = ["status = ?", "updated_at = datetime('now','localtime')"]
+    params.append(status)
+
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            set_parts.append(f"{key} = ?")
+            params.append(val)
+
+    params.append(doc_id)
+    with get_connection() as conn:
+        conn.execute(
+            f"UPDATE documentaries SET {', '.join(set_parts)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    log.info("Belgesel #%d güncellendi: %s", doc_id, status)
+
+
+def save_documentary_media(
+    documentary_id: int,
+    scene_index: int,
+    source: str,
+    source_url: str,
+    local_path: str = "",
+    relevance_score: float = 0.0,
+) -> int:
+    """Belgesel için seçilen medyayı kaydet."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO documentary_media
+                (documentary_id, scene_index, source, source_url, local_path, relevance_score, used)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            (documentary_id, scene_index, source, source_url, local_path, relevance_score),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_documentary(doc_id: int) -> dict | None:
+    """Belgesel kaydını id ile getir."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM documentaries WHERE id = ?", (doc_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_documentaries(limit: int = 20) -> list[dict]:
+    """Son belgeselleri listele."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM documentaries ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_stats() -> dict:

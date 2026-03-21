@@ -23,6 +23,7 @@ from telegram.ext import (
 import chat
 import db
 import pipeline as pl
+from documentary_system import orchestrator
 from config import (
     SUMMARY_HOUR,
     SUMMARY_MINUTE,
@@ -296,6 +297,58 @@ async def cmd_sil(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"❌ #{content_id} ID'li kayıt bulunamadı.")
 
 
+async def cmd_belgesel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/belgesel <konu> — belgesel üretim pipeline'ını başlatır."""
+    if not _auth(update):
+        return
+    topic = " ".join(context.args) if context.args else ""
+    if not topic:
+        await update.message.reply_text(
+            "❓ Kullanım: `/belgesel Osmanlı'nın Yükselişi`",
+            parse_mode="Markdown",
+        )
+        return
+
+    msg = await update.message.reply_text(
+        f"🎬 Belgesel başlatılıyor: *{topic}*\n"
+        f"⏳ Bu işlem birkaç dakika sürebilir...",
+        parse_mode="Markdown",
+    )
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, orchestrator.run_documentary, topic
+        )
+        await msg.edit_text(
+            f"✅ *{result['title']}*\n"
+            f"🎬 {result['scene_count']} sahne\n"
+            f"⭐ QA skoru: {result['qa_score']:.1f}/10\n"
+            f"💾 `{result['output_path']}`",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        log.error("Belgesel komutu hatası: %s", exc, exc_info=True)
+        await msg.edit_text(f"❌ Hata: `{exc}`", parse_mode="Markdown")
+
+
+async def cmd_belgeler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/belgeler — belgesel listesini gösterir."""
+    if not _auth(update):
+        return
+    rows = db.list_documentaries()
+    if not rows:
+        await update.message.reply_text("📭 Henüz belgesel yok.")
+        return
+    lines = ["🎬 *Belgeseller*\n"]
+    for r in rows:
+        status_icon = {"done": "✅", "error": "❌", "pending": "⏳"}.get(r["status"], "🔄")
+        lines.append(
+            f"{status_icon} [{r['id']}] *{r['topic']}* — {r['status']}\n"
+            f"   🕐 {r['created_at'][:16]}"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def send_daily_summary(app: Application) -> None:
     """Günlük özet mesajını hazırla ve gönder."""
     log.info("Günlük özet gönderiliyor...")
@@ -330,6 +383,8 @@ def build_application() -> Application:
     """Telegram uygulamasını ve zamanlayıcıyı yapılandır."""
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("belgesel", cmd_belgesel))
+    app.add_handler(CommandHandler("belgeler", cmd_belgeler))
     app.add_handler(CommandHandler("ozet", cmd_ozet))
     app.add_handler(CommandHandler("soru", cmd_soru))
     app.add_handler(CommandHandler("istatistik", cmd_istatistik))
