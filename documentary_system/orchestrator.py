@@ -160,7 +160,10 @@ def _concat_scenes(state: DocumentaryState, work_dir: Path) -> Path:
             "-f", "concat",
             "-safe", "0",
             "-i", str(concat_file),
-            "-c", "copy",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
             str(output_path),
         ],
         check=True, capture_output=True,
@@ -231,8 +234,9 @@ def run_documentary(topic: str, target_duration: int = 600) -> dict:
         _update_status(state, "searching")
         for scene in state.scenes:
             if scene.index > 0:
-                log.info("[#%d] Rate limit önlemi: 65 saniye bekleniyor...", doc_id)
-                time.sleep(65)
+                wait_secs = 70
+                log.info("[#%d] Rate limit önlemi: %ds bekleniyor...", doc_id, wait_secs)
+                time.sleep(wait_secs)
             log.info("[#%d] Sahne %d medya aranıyor...", doc_id, scene.index)
             try:
                 media_crew = create_media_crew(scene, state)

@@ -96,19 +96,21 @@ class FFmpegTool(BaseTool):
         duration: float,
         zoom_direction: str,
     ) -> None:
-        """Fotoğrafa Ken Burns (zoom+pan) efekti uygula."""
+        """Fotoğrafa düzgün Ken Burns efekti uygula (titreme önlendi)."""
         fps = 25
         nb_frames = int(duration * fps)
 
         if zoom_direction == "in":
-            zoom_expr = "zoom+0.0015"
+            zoom_expr = "zoom+0.0005"
         else:
-            zoom_expr = "if(eq(on,1),1.5,zoom-0.0015)"
+            zoom_expr = "if(eq(on,1),1.3,zoom-0.0005)"
 
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
 
+        # Önce görseli büyüt, sonra zoompan uygula (titreme önlemi)
         vf = (
+            f"scale=8000:-1,"
             f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}'"
             f":d={nb_frames}:s=1920x1080:fps={fps},"
             f"scale=1920:1080"
@@ -122,11 +124,13 @@ class FFmpegTool(BaseTool):
                 "-vf", vf,
                 "-t", str(duration),
                 "-c:v", "libx264",
+                "-preset", "fast",
                 "-pix_fmt", "yuv420p",
                 "-an",
                 str(output_path),
             ],
             check=True, capture_output=True,
+            timeout=120,
         )
 
     def _clip(

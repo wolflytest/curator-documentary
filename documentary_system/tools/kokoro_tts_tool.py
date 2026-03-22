@@ -100,10 +100,10 @@ class KokoroTTSTool(BaseTool):
         from kokoro_onnx import Kokoro
 
         # Model dosyaları mevcut mu kontrol et
-        model_path = Path("kokoro-v1.9.onnx")
+        model_path = Path("kokoro-v1.0.int8.onnx")
         voices_path = Path("voices-v1.0.bin")
         if not model_path.exists() or not voices_path.exists():
-            raise FileNotFoundError("Kokoro model dosyaları bulunamadı (kokoro-v1.9.onnx, voices-v1.0.bin)")
+            raise FileNotFoundError("Kokoro model dosyaları bulunamadı (kokoro-v1.0.int8.onnx, voices-v1.0.bin)")
 
         kokoro = Kokoro(str(model_path), str(voices_path))
         samples, sample_rate = kokoro.create(text, voice=voice, speed=speed, lang="tr")
@@ -130,10 +130,29 @@ class KokoroTTSTool(BaseTool):
         return True
 
     def _gtts_fallback(self, text: str, output_path: Path) -> None:
-        """gTTS ile Türkçe ses üret, mp3 olarak kaydet."""
+        """gTTS ile Türkçe ses üret, normalize edilmiş kaliteli mp3 kaydet."""
+        import tempfile
         from gtts import gTTS
-        tts = gTTS(text=text, lang="tr")
-        tts.save(str(output_path))
+
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        tts = gTTS(text=text, lang="tr", slow=False)
+        tts.save(str(tmp_path))
+
+        # FFmpeg ile ses seviyesi normalize et
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(tmp_path),
+                "-af", "loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100",
+                "-codec:a", "libmp3lame",
+                "-b:a", "192k",
+                str(output_path),
+            ],
+            check=True, capture_output=True,
+        )
+        tmp_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
