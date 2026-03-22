@@ -18,9 +18,15 @@ log = logging.getLogger(__name__)
 _MAX_CANDIDATES = 8     # İndirilecek toplam aday limiti
 
 
+_POLLINATIONS_MIN_SCORE = 7.5   # Bu skorun altındaysa Pollinations ile görüntü üret
+_USE_POLLINATIONS_FALLBACK = True  # Pollinations fallback'i etkinleştir
+
+
 def select_best_media(scene: SceneState, state: DocumentaryState) -> dict | None:
     """
     Sahne için semantik olarak en uygun medyayı seç.
+
+    Medya bulunamazsa veya skor düşükse Pollinations.AI ile görüntü üretir.
 
     Returns:
         dict ile alan: local_path, source, source_url, media_type,
@@ -28,26 +34,98 @@ def select_best_media(scene: SceneState, state: DocumentaryState) -> dict | None
         Ya da None (aday bulunamazsa)
     """
     candidates = _gather_candidates(scene, state.used_media_hashes)
-    if not candidates:
-        log.warning("[Scene %d] Hiç aday medya bulunamadı.", scene.index)
-        return None
 
-    scored = _score_candidates(candidates, scene)
-    if not scored:
-        log.warning("[Scene %d] Tüm adaylar reddedildi.", scene.index)
-        return None
+    if candidates:
+        scored = _score_candidates(candidates, scene)
+        if scored:
+            scored.sort(key=lambda x: x["relevance_score"] + x["quality_score"], reverse=True)
+            best = scored[0]
+            combined_score = best["relevance_score"] + best["quality_score"]
 
-    scored.sort(key=lambda x: x["relevance_score"] + x["quality_score"], reverse=True)
-    best = scored[0]
-    log.info(
-        "[Scene %d] En iyi medya: %s  rel=%.1f  qual=%.1f  kaynak=%s",
-        scene.index,
-        Path(best["local_path"]).name,
-        best["relevance_score"],
-        best["quality_score"],
-        best["source"],
-    )
-    return best
+            # Skor yeterince yüksekse doğrudan döndür
+            if combined_score >= _POLLINATIONS_MIN_SCORE * 2:
+                log.info(
+                    "[Scene %d] En iyi medya: %s  rel=%.1f  qual=%.1f  kaynak=%s",
+                    scene.index,
+                    Path(best["local_path"]).name,
+                    best["relevance_score"],
+                    best["quality_score"],
+                    best["source"],
+                )
+                return best
+
+            log.info(
+                "[Scene %d] Skor düşük (%.1f < %.1f), Pollinations denenecek.",
+                scene.index, combined_score, _POLLINATIONS_MIN_SCORE * 2
+            )
+
+    if _USE_POLLINATIONS_FALLBACK:
+        pollinations_result = _generate_with_pollinations(scene, state)
+        if pollinations_result:
+            return pollinations_result
+
+    # Son çare: düşük skorlu en iyi aday
+    if candidates:
+        scored = _score_candidates(candidates, scene)
+        if scored:
+            scored.sort(key=lambda x: x["relevance_score"] + x["quality_score"], reverse=True)
+            best = scored[0]
+            log.info(
+                "[Scene %d] Fallback medya kullanıldı: %s  rel=%.1f  qual=%.1f",
+                scene.index,
+                Path(best["local_path"]).name,
+                best["relevance_score"],
+                best["quality_score"],
+            )
+            return best
+
+    log.warning("[Scene %d] Hiç medya bulunamadı.", scene.index)
+    return None
+
+
+def _generate_with_pollinations(scene: SceneState, state: DocumentaryState) -> dict | None:
+    """Pollinations.AI ile sahne için görüntü üret."""
+    try:
+        from documentary_system.tools.pollinations_tool import generate_image, aspect_to_resolution
+
+        # Görsel açıklamayı prompt olarak kullan; yoksa narration'dan türet
+        visual_desc = scene.visual_description or ""
+        keywords = ", ".join(scene.search_keywords or [])
+
+        if visual_desc:
+            prompt = f"documentary photo, {visual_desc}, {keywords}, photorealistic, high quality, cinematic"
+        else:
+            # Narration'dan kısa bir görsel prompt çıkar
+            narration_short = (scene.narration or "")[:150]
+            prompt = f"documentary photo, {narration_short}, {keywords}, photorealistic, cinematic"
+
+        # Aspect ratio'ya göre çözünürlük
+        video_aspect = getattr(state, "video_aspect", "16:9") or "16:9"
+        width, height = aspect_to_resolution(video_aspect)
+
+        log.info("[Scene %d] Pollinations görüntü üretiliyor: %s...", scene.index, prompt[:80])
+        result = generate_image(prompt=prompt, width=width, height=height)
+
+        if result["success"]:
+            local_path = result["local_path"]
+            log.info("[Scene %d] Pollinations başarılı: %s", scene.index, Path(local_path).name)
+            return {
+                "local_path":       local_path,
+                "source":           "pollinations",
+                "source_url":       "",
+                "media_type":       "photo",
+                "duration":         0,
+                "relevance_score":  8.0,   # AI üretimi — yüksek relevance
+                "quality_score":    7.5,
+                "dominant_colors":  [],
+                "clip_start":       0.0,
+            }
+        else:
+            log.warning("[Scene %d] Pollinations başarısız: %s", scene.index, result.get("error"))
+    except Exception as exc:
+        log.warning("[Scene %d] Pollinations hata: %s", scene.index, exc)
+
+    return None
 
 
 # ── Arama + İndirme ───────────────────────────────────────────────────────────
