@@ -1,3 +1,10 @@
+# ── MoneyPrinterTurbo-Extended entegrasyonu ───────────────────────────────────
+sentence-transformers>=3.0
+moviepy>=2.1.2
+edge-tts>=7.0
+faster-whisper>=1.0
+scikit-learn>=1.4
+# ─────────────────────────────────────────────────────────────────────────────
 aiofiles==23.2.1
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.3

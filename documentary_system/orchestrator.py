@@ -2,9 +2,11 @@
 Ana orkestratör: tüm crew'ları koordine eder.
 DocumentaryState üzerinden çalışır, her adımı SQLite'a kaydeder.
 
-Medya seçimi:
-  - Eski: CrewAI media_crew (ajan tabanlı, tutarsız)
-  - Yeni: media_selector (programatik, semantik Gemini Vision skoru)
+Medya seçimi: sentence-transformers + CLIP (semantic_matcher)
+TTS:          edge_tts (EN, word timestamps) | KokoroTTS → gTTS (TR)
+Altyazı:      faster-whisper word align → karaoke SRT veya burn_srt
+Birleştirme:  MoviePy (concat + transitions + BGM) → FFmpeg fallback
+Çeşitlilik:   DiversityTracker (max_reuse=2)
 """
 import json
 import logging
@@ -18,9 +20,16 @@ from pathlib import Path
 import db
 from documentary_system.crews.qa_crew import create_qa_crew
 from documentary_system.crews.script_crew import create_script_crew
+from documentary_system.services.subtitle_service import build_srt
+from documentary_system.services.tts_service import synthesize as tts_synthesize
+from documentary_system.services.video_composer import (
+    DiversityTracker,
+    add_background_music,
+    compose_scene,
+    concat_clips,
+)
 from documentary_system.state.documentary_state import DocumentaryState, SceneState
 from documentary_system.tools.ffmpeg_tool import FFmpegTool
-from documentary_system.tools.kokoro_tts_tool import KokoroTTSTool
 from documentary_system.tools.media_selector import select_best_media
 from documentary_system.tools.srt_generator import generate_srt
 
@@ -31,8 +40,8 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 BG_MUSIC_DIR = Path(__file__).parent.parent / "bg_music"
 
-# Sahne arası bekleme: programatik selector ile çok daha az Gemini çağrısı olduğundan kısaltıldı
-_SCENE_RATE_LIMIT_SECS = 20
+# sentence-transformers + CLIP ile skorlama yaptığımız için rate limit gerekmez
+_SCENE_RATE_LIMIT_SECS = 0
 
 
 def _update_status(state: DocumentaryState, status: str) -> None:
@@ -78,23 +87,6 @@ def _get_duration(path: Path) -> float:
         return 0.0
 
 
-def _combine_clip_audio(clip_path: Path, audio_path: Path, output_path: Path) -> Path:
-    subprocess.run(
-        ["ffmpeg", "-y",
-         "-i", str(clip_path),
-         "-i", str(audio_path),
-         "-map", "0:v:0",
-         "-map", "1:a:0",
-         "-c:v", "copy",
-         "-c:a", "aac",
-         "-b:a", "128k",
-         "-shortest",
-         str(output_path)],
-        check=True, capture_output=True,
-    )
-    return output_path
-
-
 def _find_background_music() -> Path | None:
     """bg_music/ klasöründe rastgele bir müzik dosyası seç."""
     if not BG_MUSIC_DIR.exists():
@@ -107,81 +99,6 @@ def _find_background_music() -> Path | None:
     return chosen
 
 
-def _add_background_music(video_path: Path, music_path: Path, work_dir: Path) -> Path | None:
-    """Videoyu arka plan müziğiyle karıştır (-25dB müzik, sonsuz döngü)."""
-    output_path = work_dir / f"withmusic_{video_path.name}"
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y",
-             "-i", str(video_path),
-             "-stream_loop", "-1",
-             "-i", str(music_path),
-             "-filter_complex",
-             "[1:a]volume=0.12,apad[music];[0:a][music]amix=inputs=2:duration=first[aout]",
-             "-map", "0:v",
-             "-map", "[aout]",
-             "-c:v", "copy",
-             "-c:a", "aac",
-             "-b:a", "192k",
-             "-shortest",
-             str(output_path)],
-            check=True, capture_output=True,
-        )
-        log.info("Arka plan müziği eklendi: %s", output_path.name)
-        return output_path
-    except subprocess.CalledProcessError as exc:
-        log.warning("Arka plan müziği eklenemedi: %s", exc.stderr.decode(errors="replace")[:200])
-        return None
-
-
-def _concat_scenes(state: DocumentaryState, work_dir: Path) -> Path:
-    combined_clips = []
-    for scene in state.scenes:
-        if not scene.final_clip_path or not scene.tts_path:
-            log.warning("Sahne %d eksik (clip=%s, tts=%s), atlanıyor.",
-                        scene.index, scene.final_clip_path, scene.tts_path)
-            continue
-
-        clip_path    = Path(scene.final_clip_path)
-        tts_path     = Path(scene.tts_path)
-        combined_path = work_dir / f"combined_{scene.index:03d}.mp4"
-
-        try:
-            _combine_clip_audio(clip_path, tts_path, combined_path)
-            combined_clips.append(combined_path)
-            log.info("Sahne %d birleştirildi: %s", scene.index, combined_path.name)
-        except subprocess.CalledProcessError as exc:
-            log.error("Sahne %d birleştirme hatası: %s",
-                      scene.index, exc.stderr.decode(errors="replace")[:300])
-
-    if not combined_clips:
-        raise RuntimeError("Birleştirilecek tamamlanmış sahne bulunamadı.")
-
-    concat_file = work_dir / "concat_list.txt"
-    concat_file.write_text(
-        "\n".join(f"file '{p}'" for p in combined_clips),
-        encoding="utf-8",
-    )
-
-    safe_title  = re.sub(r"[^\w\-_\u0080-\uffff]", "_", state.title or state.topic)[:50]
-    output_path = OUTPUT_DIR / f"{state.doc_id}_{safe_title}.mp4"
-
-    subprocess.run(
-        ["ffmpeg", "-y",
-         "-f", "concat",
-         "-safe", "0",
-         "-i", str(concat_file),
-         "-c:v", "copy",
-         "-c:a", "aac",
-         "-b:a", "128k",
-         "-movflags", "+faststart",
-         str(output_path)],
-        check=True, capture_output=True,
-    )
-
-    duration = _get_duration(output_path)
-    log.info("Final video oluşturuldu: %s (%.1fs)", output_path.name, duration)
-    return output_path
 
 
 def _extract_json(raw: str) -> dict:
@@ -234,8 +151,9 @@ def run_documentary(
     work_dir.mkdir(parents=True, exist_ok=True)
     log.info("Belgesel başlatılıyor: '%s' lang=%s voice=%s", topic, language, voice)
 
-    doc_id = db.create_documentary(topic)
-    state  = DocumentaryState(doc_id=doc_id, topic=topic)
+    doc_id   = db.create_documentary(topic)
+    state    = DocumentaryState(doc_id=doc_id, topic=topic)
+    diversity = DiversityTracker(max_reuse=2)
 
     try:
         # ── 1. Senaryo ────────────────────────────────────────────────────────
@@ -247,16 +165,19 @@ def run_documentary(
         db.update_documentary_status(doc_id, "scripting", script_json=state.to_json())
         log.info("[#%d] Senaryo: '%s', %d sahne", doc_id, state.title, len(state.scenes))
 
-        # ── 2. Semantik medya seçimi ──────────────────────────────────────────
+        # ── 2. Semantik medya seçimi (sentence-transformers + CLIP) ───────────
         _update_status(state, "searching")
         for scene in state.scenes:
-            if scene.index > 0:
-                log.info("[#%d] Rate limit önlemi: %ds bekleniyor...", doc_id, _SCENE_RATE_LIMIT_SECS)
-                time.sleep(_SCENE_RATE_LIMIT_SECS)
             log.info("[#%d] Sahne %d medya seçiliyor...", doc_id, scene.index)
             try:
                 selected = select_best_media(scene, state)
+                # Çeşitlilik kontrolü: aynı dosya max 2 kez kullanılabilir
+                if selected and not diversity.is_allowed(selected.get("local_path", "")):
+                    log.info("[#%d] Sahne %d: çeşitlilik limiti, alternatif aranıyor...", doc_id, scene.index)
+                    selected = None  # Sonraki en iyi adaya düşülecek
+
                 if selected:
+                    diversity.register(selected.get("local_path", ""))
                     scene.approved_media = selected
                     scene.color_palette  = selected.get("dominant_colors", [])
                     source_url = selected.get("source_url", "")
@@ -279,37 +200,44 @@ def run_documentary(
             except Exception as exc:
                 log.error("[#%d] Sahne %d medya hatası: %s", doc_id, scene.index, exc)
 
-        # ── 3. TTS + SRT + FFmpeg ─────────────────────────────────────────────
+        # ── 3. TTS (edge_tts/KokoroTTS) + Karaoke SRT + FFmpeg ───────────────
         _update_status(state, "assembling")
-        tts_tool    = KokoroTTSTool()
         ffmpeg_tool = FFmpegTool()
+        composed_clips: list[Path] = []
 
         for scene in state.scenes:
-            # TTS
+            # TTS — edge_tts (EN kelime zaman damgalı) veya Kokoro/gTTS (TR)
             tts_output = work_dir / f"tts_{scene.index:03d}.mp3"
-            tts_result = json.loads(tts_tool._run(json.dumps({
-                "text":        scene.narration,
-                "output_path": str(tts_output),
-                "voice":       voice if language == "en" else "gtts_tr",
-                "language":    language,
-                "speed":       0.95,
-            })))
+            tts_result = tts_synthesize(
+                text=scene.narration,
+                output_path=tts_output,
+                language=language,
+                voice=voice if language == "en" else "gtts_tr",
+                align_words=True,
+            )
+
             tts_duration = 0.0
-            if tts_result.get("success"):
-                scene.tts_path = tts_result["output_path"]
-                tts_duration   = tts_result.get("duration_sec", 0.0)
-                log.info("[#%d] Sahne %d TTS: %.1fs", doc_id, scene.index, tts_duration)
+            if tts_result.success:
+                scene.tts_path = tts_result.audio_path
+                tts_duration   = tts_result.duration_sec
+                log.info("[#%d] Sahne %d TTS: %.1fs (%d kelime damgası)",
+                         doc_id, scene.index, tts_duration, len(tts_result.word_timestamps))
             else:
-                log.warning("[#%d] Sahne %d TTS başarısız.", doc_id, scene.index)
+                log.warning("[#%d] Sahne %d TTS başarısız: %s", doc_id, scene.index, tts_result.error)
 
-            # SRT altyazı üret
-            srt_path = work_dir / f"sub_{scene.index:03d}.srt"
+            # SRT altyazı: kelime zaman damgalı karaoke veya klasik
+            srt_path  = work_dir / f"sub_{scene.index:03d}.srt"
             audio_dur = tts_duration if tts_duration > 0 else scene.duration_sec
-            generate_srt(scene.narration, audio_dur, srt_path)
 
-            # FFmpeg klip
-            clip_output    = work_dir / f"clip_{scene.index:03d}.mp4"
-            clip_with_sub  = work_dir / f"clip_sub_{scene.index:03d}.mp4"
+            if tts_result.word_timestamps:
+                build_srt(tts_result.word_timestamps, srt_path)
+            else:
+                generate_srt(scene.narration, audio_dur, srt_path)
+
+            # FFmpeg klip (Ken Burns veya video kesme)
+            clip_raw   = work_dir / f"clip_{scene.index:03d}.mp4"
+            clip_sub   = work_dir / f"clip_sub_{scene.index:03d}.mp4"
+            clip_final = work_dir / f"clip_final_{scene.index:03d}.mp4"
 
             if scene.approved_media and scene.approved_media.get("local_path"):
                 media       = scene.approved_media
@@ -317,7 +245,7 @@ def run_documentary(
 
                 clip_result = json.loads(ffmpeg_tool._run(json.dumps({
                     "input_path":     media.get("local_path", ""),
-                    "output_path":    str(clip_output),
+                    "output_path":    str(clip_raw),
                     "type":           ffmpeg_type,
                     "duration":       scene.duration_sec,
                     "clip_start":     media.get("clip_start", 0.0),
@@ -325,62 +253,96 @@ def run_documentary(
                 })))
 
                 if clip_result.get("success"):
-                    # Altyazı yak
+                    current_clip = Path(clip_result["output_path"])
+
+                    # Altyazı yak (SRT → burn_srt)
                     if srt_path.exists() and srt_path.stat().st_size > 10:
                         sub_result = json.loads(ffmpeg_tool._run(json.dumps({
-                            "input_path":  clip_result["output_path"],
-                            "output_path": str(clip_with_sub),
+                            "input_path":  str(current_clip),
+                            "output_path": str(clip_sub),
                             "type":        "burn_srt",
                             "srt_path":    str(srt_path),
                         })))
-                        scene.final_clip_path = (
-                            sub_result["output_path"]
+                        current_clip = (
+                            Path(sub_result["output_path"])
                             if sub_result.get("success")
-                            else clip_result["output_path"]
+                            else current_clip
                         )
+
+                    # TTS sesini MoviePy ile klibe ekle (geçişli)
+                    if tts_result.success:
+                        composed = compose_scene(
+                            video_path=current_clip,
+                            audio_path=Path(tts_result.audio_path),
+                            output_path=clip_final,
+                            duration=audio_dur,
+                            transition=scene.transition,
+                        )
+                        scene.final_clip_path = str(composed) if composed else str(current_clip)
                     else:
-                        scene.final_clip_path = clip_result["output_path"]
-                    log.info("[#%d] Sahne %d klip + altyazı hazır.", doc_id, scene.index)
+                        scene.final_clip_path = str(current_clip)
+                    log.info("[#%d] Sahne %d klip + altyazı + ses hazır.", doc_id, scene.index)
                 else:
                     log.warning("[#%d] Sahne %d FFmpeg başarısız.", doc_id, scene.index)
             else:
-                # Medya yok → siyah arka plan
+                # Medya yok → siyah arka plan + altyazı
                 log.warning("[#%d] Sahne %d için medya yok, siyah arka plan...", doc_id, scene.index)
                 try:
                     subprocess.run(
                         ["ffmpeg", "-y", "-f", "lavfi",
-                         "-i", f"color=black:size=1920x1080:duration={scene.duration_sec}:rate=25",
+                         "-i", f"color=black:size=1920x1080:duration={audio_dur}:rate=25",
                          "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                         str(clip_output)],
+                         str(clip_raw)],
                         check=True, capture_output=True,
                     )
-                    # Altyazı yak (siyah zemin üstüne)
+                    current_clip = clip_raw
                     if srt_path.exists() and srt_path.stat().st_size > 10:
                         sub_result = json.loads(ffmpeg_tool._run(json.dumps({
-                            "input_path":  str(clip_output),
-                            "output_path": str(clip_with_sub),
+                            "input_path":  str(clip_raw),
+                            "output_path": str(clip_sub),
                             "type":        "burn_srt",
                             "srt_path":    str(srt_path),
                         })))
-                        scene.final_clip_path = (
-                            sub_result["output_path"]
+                        current_clip = (
+                            Path(sub_result["output_path"])
                             if sub_result.get("success")
-                            else str(clip_output)
+                            else clip_raw
                         )
+                    if tts_result.success:
+                        composed = compose_scene(
+                            video_path=current_clip,
+                            audio_path=Path(tts_result.audio_path),
+                            output_path=clip_final,
+                            duration=audio_dur,
+                            transition="fade",
+                        )
+                        scene.final_clip_path = str(composed) if composed else str(current_clip)
                     else:
-                        scene.final_clip_path = str(clip_output)
+                        scene.final_clip_path = str(current_clip)
                 except subprocess.CalledProcessError as exc:
                     log.error("[#%d] Sahne %d siyah klip hatası: %s",
                               doc_id, scene.index, exc.stderr.decode(errors="replace")[:300])
 
-        # ── 4. Sahneleri birleştir ────────────────────────────────────────────
-        output_path  = _concat_scenes(state, work_dir)
-        state.output_path = str(output_path)
+            if scene.final_clip_path and Path(scene.final_clip_path).exists():
+                composed_clips.append(Path(scene.final_clip_path))
 
-        # ── 5. Arka plan müziği (opsiyonel) ───────────────────────────────────
+        # ── 4. Sahneleri MoviePy ile birleştir ────────────────────────────────
+        if not composed_clips:
+            raise RuntimeError("Birleştirilecek tamamlanmış sahne bulunamadı.")
+
+        safe_title  = re.sub(r"[^\w\-_\u0080-\uffff]", "_", state.title or state.topic)[:50]
+        output_path = OUTPUT_DIR / f"{state.doc_id}_{safe_title}.mp4"
+
+        concat_clips(composed_clips, output_path)
+        state.output_path = str(output_path)
+        duration = _get_duration(output_path)
+        log.info("Final video oluşturuldu: %s (%.1fs)", output_path.name, duration)
+
+        # ── 5. Arka plan müziği (MoviePy AudioLoop) ───────────────────────────
         bg_music = _find_background_music()
         if bg_music:
-            with_music = _add_background_music(output_path, bg_music, OUTPUT_DIR)
+            music_output = OUTPUT_DIR / f"withmusic_{output_path.name}"
+            with_music = add_background_music(output_path, bg_music, music_output)
             if with_music:
                 output_path.unlink(missing_ok=True)
                 output_path = with_music

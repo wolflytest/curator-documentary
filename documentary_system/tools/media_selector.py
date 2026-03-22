@@ -1,13 +1,11 @@
 """
-Programatik medya seçici — MoneyPrinterTurbo benzeri semantik eşleştirme.
+Programatik medya seçici — MoneyPrinterTurbo-Extended semantik eşleştirme.
 
 Her sahne için:
   1. Pexels (foto + video) + Wikimedia + YouTube CC'de ara (çoklu keyword)
   2. Her adayı indir  (MD5 önbellek sayesinde tekrar indirilmez)
-  3. Fotoğrafları doğrudan Gemini Vision API ile skorla (CrewAI ajanı değil)
+  3. sentence-transformers + CLIP ile semantik skorla (Gemini Vision fallback)
   4. relevance_score + quality_score toplamına göre sırala → en iyi adayı döndür
-
-Bu yaklaşım ajanların talimatları takip etmeme sorununu ortadan kaldırır.
 """
 import json
 import logging
@@ -18,7 +16,6 @@ from documentary_system.state.documentary_state import DocumentaryState, SceneSt
 log = logging.getLogger(__name__)
 
 _MAX_CANDIDATES = 8     # İndirilecek toplam aday limiti
-_MAX_VISION_CALLS = 5   # Sahne başına maksimum Gemini Vision çağrısı
 
 
 def select_best_media(scene: SceneState, state: DocumentaryState) -> dict | None:
@@ -138,45 +135,49 @@ def _gather_candidates(scene: SceneState, used_hashes: set) -> list[dict]:
     return candidates
 
 
-# ── Vision Skorlama ───────────────────────────────────────────────────────────
+# ── Semantik Skorlama (sentence-transformers + CLIP) ──────────────────────────
 
 def _score_candidates(candidates: list[dict], scene: SceneState) -> list[dict]:
     """
-    Her fotoğrafı Gemini Vision ile skorla.
-    Videolar için duration uyumsuna göre sabit skor verilir.
+    sentence-transformers + CLIP ile semantik skorla.
+    Gemini Vision'dan çok daha hızlı, rate limit yok, API maliyeti yok.
     """
+    try:
+        from documentary_system.services.semantic_matcher import get_matcher
+        matcher = get_matcher()
+        return matcher.rank_candidates(
+            candidates=candidates,
+            narration=scene.narration,
+            keywords=scene.search_keywords or [],
+            visual_description=scene.visual_description or "",
+        )
+    except Exception as exc:
+        log.warning("[Scene %d] Semantik skorlama hatası: %s — Gemini Vision fallback", scene.index, exc)
+        return _score_candidates_gemini_fallback(candidates, scene)
+
+
+def _score_candidates_gemini_fallback(candidates: list[dict], scene: SceneState) -> list[dict]:
+    """Gemini Vision fallback — semantic_matcher kullanılamadığında."""
     from documentary_system.tools.gemini_vision_tool import GeminiVisionTool
 
     vision = GeminiVisionTool()
     scored: list[dict] = []
     vision_calls = 0
+    _MAX_VISION_CALLS = 5
 
     for c in candidates:
         media_type = c.get("media_type", "photo")
 
         if media_type == "video":
-            # Video için: sahne süresinden uzunsa uygun, kısaysa düşük skor
             vid_dur = float(c.get("duration", 0))
             rel = 6.5 if vid_dur >= scene.duration_sec else 5.0
-            scored.append({
-                **c,
-                "relevance_score":  rel,
-                "quality_score":    7.0,
-                "dominant_colors":  [],
-                "clip_start":       0.0,
-            })
+            scored.append({**c, "relevance_score": rel, "quality_score": 7.0,
+                           "dominant_colors": [], "clip_start": 0.0})
             continue
 
-        # Fotoğraf — Gemini Vision
         if vision_calls >= _MAX_VISION_CALLS:
-            # Limit aşıldı, varsayılan skor
-            scored.append({
-                **c,
-                "relevance_score":  4.5,
-                "quality_score":    5.0,
-                "dominant_colors":  [],
-                "clip_start":       0.0,
-            })
+            scored.append({**c, "relevance_score": 4.5, "quality_score": 5.0,
+                           "dominant_colors": [], "clip_start": 0.0})
             continue
 
         try:
@@ -198,13 +199,9 @@ def _score_candidates(candidates: list[dict], scene: SceneState) -> list[dict]:
                     "clip_start":      0.0,
                 })
             else:
-                log.debug(
-                    "[Scene %d] Reddedildi: %s — %s",
-                    scene.index,
-                    Path(c["local_path"]).name,
-                    result.get("red_nedeni", "bilinmiyor"),
-                )
-
+                log.debug("[Scene %d] Reddedildi: %s — %s",
+                          scene.index, Path(c["local_path"]).name,
+                          result.get("red_nedeni", "bilinmiyor"))
         except Exception as exc:
             log.warning("[Scene %d] Vision skoru hatası: %s", scene.index, exc)
 

@@ -112,60 +112,76 @@ documentary_system/
 ├── state/documentary_state.py ← DocumentaryState + SceneState (JSON serialize)
 ├── crews/
 │   ├── script_crew.py        ← Creator → Optimizer → Critic (3 ajan, sequential)
-│   ├── media_crew.py         ← Searcher → Analyzer → ConsistencyAgent (sahne başına)
 │   └── qa_crew.py            ← Viewer + TechQA (final kalite kontrolü)
+├── services/                 ← MoneyPrinterTurbo-Extended entegrasyonu
+│   ├── semantic_matcher.py   ← sentence-transformers + CLIP semantik skorlama
+│   ├── tts_service.py        ← edge_tts (EN) | KokoroTTS→gTTS (TR) + faster-whisper hizalama
+│   ├── subtitle_service.py   ← Kelime damgaları → SRT + karaoke PIL render
+│   └── video_composer.py     ← MoviePy concat/geçiş/BGM + DiversityTracker
 └── tools/
     ├── wikimedia_tool.py     ← Wikimedia Commons API (CC/PD/GFDL lisanslı)
     ├── pexels_tool.py        ← Pexels stok fotoğraf/video API
     ├── ytcc_tool.py          ← YouTube Creative Commons video arama (yt-dlp)
     ├── media_download_tool.py ← download_url → local_path (MD5 önbellek)
-    ├── gemini_vision_tool.py  ← local_path → Gemini görsel analiz
-    ├── ffmpeg_tool.py        ← ken_burns | clip | subtitle
+    ├── media_selector.py     ← Programatik arama + semantic_matcher ile sıralama
+    ├── gemini_vision_tool.py  ← Gemini Vision (semantic_matcher fallback)
+    ├── ffmpeg_tool.py        ← ken_burns | clip | burn_srt
+    ├── srt_generator.py      ← Klasik SRT (word timestamps yoksa fallback)
     └── kokoro_tts_tool.py    ← Kokoro ONNX TTS, fallback: gTTS
 ```
 
 #### `run_documentary(topic, target_duration, language, voice)` Pipeline
 
 ```
-1. script_crew.kickoff()      → senaryo JSON (title, scenes[])
-2. media_crew × her sahne     → approved_media (local_path)
-   ⚠️  70s sleep arası sahne  (Gemini 15 RPM limiti)
-3. KokoroTTSTool × her sahne  → tts_path
-   language=="en" → kokoro ses kodu, language=="tr" → gtts_tr (gTTS)
-4. FFmpegTool × her sahne     → final_clip_path
-   photo → ken_burns; video → clip kes; medya yoksa → siyah (lavfi)
-5. _concat_scenes()           → tek MP4 (concat demuxer)
-6. qa_crew.kickoff()          → qa_score, approved
+1. script_crew.kickoff()        → senaryo JSON (title, scenes[])
+2. media_selector × her sahne   → approved_media (sentence-transformers + CLIP skorlama)
+   DiversityTracker: max_reuse=2 (aynı dosya 3.kez kullanılmaz)
+   Rate limit YOK (API çağrısı gerektirmez)
+3. tts_service.synthesize()     → TTSResult(audio_path, duration_sec, word_timestamps)
+   EN: edge_tts (Microsoft, ücretsiz) + faster-whisper kelime hizalaması
+   TR: KokoroTTS → gTTS fallback + faster-whisper kelime hizalaması
+4. subtitle_service.build_srt() → kelime damgalı SRT (daha hassas zamanlama)
+   word_timestamps yoksa → srt_generator.generate_srt() klasik fallback
+5. FFmpegTool                   → ken_burns (foto) | clip (video) | siyah (fallback)
+   burn_srt ile altyazı yakma
+6. video_composer.compose_scene() → MoviePy ile ses+video+geçiş birleştirme
+7. video_composer.concat_clips()  → MoviePy concat → FFmpeg fallback
+8. video_composer.add_background_music() → AudioLoop + MultiplyVolume 12%
+9. qa_crew.kickoff()            → qa_score, approved
 ```
 
 #### DocumentaryState
 
 `pending → scripting → searching → assembling → qa → done` (hata: `error`)
 
-Her adımda `db.update_documentary_status()` ile SQLite'a serialize edilir. `DocumentaryState.to_json()` / `from_json()` ile tam serialize edilebilir.
+Her adımda `db.update_documentary_status()` ile SQLite'a serialize edilir.
 
-`get_visual_context_summary()` — son 3 onaylı sahnenin renk/kaynak/tip bilgisini `ConsistencyAgent`'a bağlam olarak verir.
+#### MoneyPrinterTurbo-Extended Özellikleri
+
+| Özellik | Uygulama |
+|---------|---------|
+| sentence-transformers (all-mpnet-base-v2) | `semantic_matcher.py` metin-metin benzerliği |
+| CLIP (clip-ViT-B-32) | `semantic_matcher.py` görsel-metin benzerliği |
+| edge_tts | `tts_service.py` İngilizce TTS (Microsoft, ücretsiz) |
+| faster-whisper | `tts_service.py` kelime bazlı zaman damgası hizalaması |
+| MoviePy | `video_composer.py` concat + geçişler + BGM |
+| Karaoke SRT | `subtitle_service.py` kelime damgalı SRT |
+| Clip çeşitliliği | `DiversityTracker(max_reuse=2)` |
+
+Semantic matcher modeller lazy yüklenir (ilk çağrıda). `clip-ViT-B-32` HuggingFace Hub'dan otomatik indirilir (ilk kez ~1GB).
 
 #### CrewAI Kullanım Kuralları
 
 - Her `Task` tek bir `agent` alır (liste değil)
 - Önceki görevlere erişim: `context=[task1, task2]`
-- `Process.sequential` zorunlu — görevler sırayla çalışır
-- LLM JSON çıktısı: `_extract_json()` ile ayrıştırılır (düz JSON, markdown code block ve `{...}` bloğu — üç format toleranslı)
-
-#### Media Pipeline Akışı
-
-Agent veri zinciri: `download_url` → `MediaDownloadTool` → `local_path` → `GeminiVisionTool`
-
-`GeminiVisionTool` yalnızca local dosya yolu kabul eder. `MediaDownloadTool` MD5 hash ile önbellek tutar — aynı URL iki kez indirilmez.
-
-Her tool'un `_run()` başında düz metin / JSON olmayan input için fallback var: `json.loads` başarısız olursa girdi keyword olarak yorumlanır.
+- `Process.sequential` zorunlu
+- LLM JSON çıktısı: `_extract_json()` ile ayrıştırılır (üç format toleranslı)
 
 #### FFmpeg Detayları
 
-- **Ken Burns**: `scale=8000:-1` → `zoompan` (titreme önlemi), zoom delta `0.0005`, timeout=120s
+- **Ken Burns**: `scale=8000:-1` → `zoompan`, zoom delta `0.0005`, timeout=120s
 - **Clip**: `-ss start -t duration -vf scale=1920:1080:force_original_aspect_ratio=decrease,pad`
-- **Concat**: `-f concat -safe 0 -c:v copy -c:a aac -b:a 128k -movflags +faststart`
+- **burn_srt**: `subtitles='{path}':force_style='FontSize=22,...'` (libass gerektirir)
 
 ---
 
@@ -195,8 +211,8 @@ Pipeline (`pipeline.py`) için doğrudan `google-genai` SDK: `from google import
 - **Blocking pipeline**: `pipeline.run()` CPU-bound; `run_in_executor(None, ...)` ile çalıştırılıyor
 - **Dashboard subprocess**: `dashboard.py` orchestrator'ı `subprocess.Popen` ile çalıştırır — Streamlit event loop çakışmasını önler
 - **Türkçe TTS**: Kokoro model dosyaları yoksa gTTS fallback otomatik devreye girer; Türkçe için her zaman `voice="gtts_tr"` kodu kullanılır
-- **Rate limit**: Her sahne media crew çağrısı arasında 70s uyku (Gemini 15 RPM)
-- **TTS_VOICES yapısı**: `config.TTS_VOICES` iç içe dict: `{dil: {ses_kodu: etiket}}` — 8 İngilizce Kokoro sesi + 1 Türkçe gTTS
+- **Rate limit YOK**: semantic_matcher API çağrısı gerektirmez; Gemini Vision sadece fallback
+- **TTS_VOICES yapısı**: `config.TTS_VOICES` iç içe dict: `{dil: {ses_kodu: etiket}}` — 8 İngilizce edge_tts sesi + 1 Türkçe gTTS
 - **VIDEO_DURATIONS yapısı**: `config.VIDEO_DURATIONS` string key: `{"30": "30 saniye (Test)", ..., "900": "15 dakika (Uzun)"}`
 
 ## MCP Sunucuları
