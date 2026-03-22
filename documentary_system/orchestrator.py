@@ -127,25 +127,21 @@ def run_documentary(
     target_duration: int = 600,
     language: str = "tr",
     voice: str = "gtts_tr",
+    transition_mode: str = "shuffle",
+    subtitle_color: str = "#ffdc00",
+    bgm_volume: float = 0.20,
 ) -> dict:
     """
     Tam belgesel üretim pipeline'ı.
-
-    Adımlar:
-      1. script_crew  → senaryo (target language'da)
-      2. media_selector × sahne  → semantik görsel eşleştirme
-      3. KokoroTTS × sahne  → ses
-      4. SRT üret × sahne  → altyazı
-      5. FFmpeg × sahne  → klip + altyazı yak
-      6. Sahneleri birleştir
-      7. Arka plan müziği (bg_music/ varsa)
-      8. QA crew
 
     Args:
         topic:           Belgesel konusu
         target_duration: Hedef süre (saniye)
         language:        'tr' | 'en'
-        voice:           Kokoro ses kodu (en için) veya 'gtts_tr' (tr için)
+        voice:           edge_tts ses kodu (en için) veya 'gtts_tr' (tr için)
+        transition_mode: cut | fade | shuffle | slidein_left | slidein_right | ...
+        subtitle_color:  Aktif kelime rengi hex (örn. '#ffdc00')
+        bgm_volume:      Arka plan müziği ses seviyesi (0.0–1.0, MPT default 0.20)
     """
     work_dir = Path(f"/tmp/curator_docs/{int(time.time())}")
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +149,7 @@ def run_documentary(
 
     doc_id   = db.create_documentary(topic)
     state    = DocumentaryState(doc_id=doc_id, topic=topic)
-    diversity = DiversityTracker(max_reuse=2)
+    diversity  = DiversityTracker(max_reuse=2)
 
     try:
         # ── 1. Senaryo ────────────────────────────────────────────────────────
@@ -270,13 +266,15 @@ def run_documentary(
                         )
 
                     # TTS sesini MoviePy ile klibe ekle (geçişli)
+                    # transition_mode override: dashboard'dan gelen geçiş modunu kullan
+                    effective_transition = transition_mode if transition_mode != "auto" else scene.transition
                     if tts_result.success:
                         composed = compose_scene(
                             video_path=current_clip,
                             audio_path=Path(tts_result.audio_path),
                             output_path=clip_final,
                             duration=audio_dur,
-                            transition=scene.transition,
+                            transition=effective_transition,
                         )
                         scene.final_clip_path = str(composed) if composed else str(current_clip)
                     else:
@@ -314,7 +312,7 @@ def run_documentary(
                             audio_path=Path(tts_result.audio_path),
                             output_path=clip_final,
                             duration=audio_dur,
-                            transition="fade",
+                            transition=effective_transition,
                         )
                         scene.final_clip_path = str(composed) if composed else str(current_clip)
                     else:
@@ -342,7 +340,7 @@ def run_documentary(
         bg_music = _find_background_music()
         if bg_music:
             music_output = OUTPUT_DIR / f"withmusic_{output_path.name}"
-            with_music = add_background_music(output_path, bg_music, music_output)
+            with_music = add_background_music(output_path, bg_music, music_output, volume=bgm_volume)
             if with_music:
                 output_path.unlink(missing_ok=True)
                 output_path = with_music

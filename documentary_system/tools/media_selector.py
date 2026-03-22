@@ -59,10 +59,12 @@ def _gather_candidates(scene: SceneState, used_hashes: set) -> list[dict]:
     from documentary_system.tools.wikimedia_tool import WikimediaTool
     from documentary_system.tools.ytcc_tool import YouTubeCCTool
 
-    pexels = PexelsTool()
-    wiki   = WikimediaTool()
-    ytcc   = YouTubeCCTool()
-    dl     = MediaDownloadTool()
+    pexels  = PexelsTool()
+    wiki    = WikimediaTool()
+    ytcc    = YouTubeCCTool()
+    dl      = MediaDownloadTool()
+    from documentary_system.tools.pixabay_tool import PixabayTool
+    pixabay = PixabayTool()
 
     raw: list[dict] = []
 
@@ -80,6 +82,13 @@ def _gather_candidates(scene: SceneState, used_hashes: set) -> list[dict]:
             raw.extend([{**i, "source": "pexels", "media_type": "video"} for i in items])
         except Exception as exc:
             log.debug("Pexels video hata (%s): %s", kw, exc)
+
+        # Pixabay video (MPT-Extended kaynağı)
+        try:
+            items = json.loads(pixabay._run(json.dumps({"keyword": kw, "limit": 2})))
+            raw.extend(items)
+        except Exception as exc:
+            log.debug("Pixabay hata (%s): %s", kw, exc)
 
         # Wikimedia
         try:

@@ -1,16 +1,18 @@
 """
-Altyazı servisi — MoneyPrinterTurbo-Extended tarzı karaoke altyazıları.
+Altyazı servisi — MoneyPrinterTurbo-Extended kodu + karaoke overlay.
 
-İki mod:
-  1. SRT üretimi:        word_timestamps → SRT dosyası
-  2. Karaoke render:     word_timestamps → PIL ile kare-kare renk animasyonu
+MPT-Extended'dan alınan fonksiyonlar (orijinal kod):
+  - levenshtein_distance / similarity / correct  → SRT drift düzeltme
+  - _wrap_text_into_lines / _balance_subtitle_lines → daha iyi satır bölme
 
-Karaoke: Aktif kelime sarı + büyük, diğerleri beyaz + küçük.
-         Her kare bir PIL görüntüsü → ffmpeg ile video üstüne binen overlay.
+Curator eklentileri:
+  - build_srt()           → word_timestamps → SRT
+  - render_karaoke_overlay() → PIL karaoke animasyonu
 """
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -244,3 +246,161 @@ def _draw_karaoke_line(
         # Asıl metin
         draw.text((x, y), p["text"], font=p["font"], fill=p["color"] + (255,))
         x += p["w"]
+
+# ── MPT-Extended: Levenshtein SRT düzeltme (orijinal kod) ────────────────────
+# Kaynak: https://github.com/Asad-Ismail/MoneyPrinterTurbo-Extended/blob/main/app/services/subtitle.py
+
+def _file_to_subtitles(filename: str | Path) -> list[tuple]:
+    """SRT dosyasını parse et."""
+    path = Path(filename)
+    if not path.exists():
+        return []
+    times_texts = []
+    current_times = None
+    current_text = ""
+    index = 0
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            times = re.findall(r"([0-9]*:[0-9]*:[0-9]*,[0-9]*)", line)
+            if times:
+                current_times = line
+            elif line.strip() == "" and current_times:
+                index += 1
+                times_texts.append((index, current_times.strip(), current_text.strip()))
+                current_times, current_text = None, ""
+            elif current_times:
+                current_text += line
+    return times_texts
+
+
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Levenshtein mesafesi (MPT-Extended orijinal)."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
+def _subtitle_similarity(a: str, b: str) -> float:
+    """Levenshtein tabanlı metin benzerliği (0–1)."""
+    distance = levenshtein_distance(a.lower(), b.lower())
+    max_length = max(len(a), len(b))
+    return 1 - (distance / max_length) if max_length else 1.0
+
+
+def correct_srt(subtitle_file: str | Path, video_script: str) -> None:
+    """
+    SRT'yi video senaryosu ile karşılaştırarak Levenshtein tabanlı düzeltme.
+    MPT-Extended orijinal `correct()` fonksiyonu — sadece import değişti.
+    """
+    subtitle_items = _file_to_subtitles(subtitle_file)
+    # Noktalama ile böl
+    script_lines = [s.strip() for s in re.split(r'[.!?。！？]', video_script) if s.strip()]
+
+    corrected = False
+    new_subtitle_items = []
+    script_index = 0
+    subtitle_index = 0
+
+    while script_index < len(script_lines) and subtitle_index < len(subtitle_items):
+        script_line = script_lines[script_index]
+        subtitle_line = subtitle_items[subtitle_index][2].strip()
+
+        if script_line == subtitle_line:
+            new_subtitle_items.append(subtitle_items[subtitle_index])
+            script_index += 1
+            subtitle_index += 1
+        else:
+            combined = subtitle_line
+            start_time = subtitle_items[subtitle_index][1].split(" --> ")[0]
+            end_time   = subtitle_items[subtitle_index][1].split(" --> ")[1]
+            next_idx   = subtitle_index + 1
+
+            while next_idx < len(subtitle_items):
+                next_sub = subtitle_items[next_idx][2].strip()
+                if _subtitle_similarity(script_line, combined + " " + next_sub) > _subtitle_similarity(script_line, combined):
+                    combined += " " + next_sub
+                    end_time  = subtitle_items[next_idx][1].split(" --> ")[1]
+                    next_idx += 1
+                else:
+                    break
+
+            new_subtitle_items.append((
+                len(new_subtitle_items) + 1,
+                f"{start_time} --> {end_time}",
+                script_line if _subtitle_similarity(script_line, combined) > 0.8 else combined,
+            ))
+            corrected = True
+            script_index  += 1
+            subtitle_index = next_idx
+
+    if corrected:
+        with open(subtitle_file, "w", encoding="utf-8") as fd:
+            for i, item in enumerate(new_subtitle_items):
+                fd.write(f"{i + 1}\n{item[1]}\n{item[2]}\n\n")
+        log.info("SRT Levenshtein düzeltmesi tamamlandı: %s", Path(subtitle_file).name)
+
+
+# ── MPT-Extended: Satır dengeleme (orijinal kod) ─────────────────────────────
+
+def _wrap_text_into_lines(text: str, max_chars_per_line: int = 40, max_lines: int = 2) -> list[str]:
+    """Metni max_chars_per_line sınırına göre satırlara böl. Virgül noktası dikkate alınır."""
+    comma_segments = [s.strip() for s in text.split(',') if s.strip()]
+    lines = []
+    current_line = ""
+
+    for segment in comma_segments:
+        for word in segment.split():
+            test_line = current_line + (" " if current_line else "") + word
+            if len(test_line) <= max_chars_per_line:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                    current_line = word
+                else:
+                    lines.append(word)
+                    current_line = ""
+                if len(lines) >= max_lines:
+                    break
+        if current_line and len(current_line) > max_chars_per_line * 0.6:
+            lines.append(current_line)
+            current_line = ""
+            if len(lines) >= max_lines:
+                break
+
+    if current_line and len(lines) < max_lines:
+        lines.append(current_line)
+
+    if len(lines) > 1:
+        lines = _balance_subtitle_lines(lines, max_chars_per_line)
+    return lines
+
+
+def _balance_subtitle_lines(lines: list[str], max_chars_per_line: int) -> list[str]:
+    """Satır uzunluklarını ortalama hizalama için dengele (MPT-Extended orijinal)."""
+    if len(lines) <= 1:
+        return lines
+    balanced = []
+    for i, line in enumerate(lines):
+        if i < len(lines) - 1:
+            words_current = line.split()
+            words_next    = lines[i + 1].split()
+            if len(line) < max_chars_per_line * 0.7 and len(words_next) > 1:
+                test = line + " " + words_next[0]
+                if len(test) <= max_chars_per_line:
+                    balanced.append(test)
+                    lines[i + 1] = " ".join(words_next[1:])
+                    continue
+        balanced.append(line)
+    return balanced

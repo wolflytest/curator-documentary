@@ -70,6 +70,37 @@ with st.sidebar:
     )
 
     st.divider()
+    st.write("🎬 Geçiş & Efektler")
+
+    # Geçiş modu (MPT-Extended'dan)
+    transition_options = {
+        "shuffle":        "🔀 Rastgele (Shuffle)",
+        "cut":            "✂️ Direkt Kesim (Cut)",
+        "fade":           "🌅 Kararma (Fade)",
+        "slidein_left":   "⬅️ Soldan Kaydırma",
+        "slidein_right":  "➡️ Sağdan Kaydırma",
+        "slidein_top":    "⬆️ Yukarıdan Kaydırma",
+        "slidein_bottom": "⬇️ Aşağıdan Kaydırma",
+    }
+    transition_mode = st.selectbox(
+        "🎞️ Geçiş Modu",
+        options=list(transition_options.keys()),
+        format_func=lambda x: transition_options[x],
+        index=0,
+    )
+
+    # Altyazı rengi (MPT-Extended'dan)
+    subtitle_color = st.color_picker(
+        "🎨 Altyazı Vurgu Rengi", value="#ffdc00"
+    )
+
+    # BGM ses seviyesi (MPT-Extended default %20)
+    bgm_volume = st.slider(
+        "🎵 Müzik Sesi", min_value=0, max_value=50, value=20, step=5,
+        format="%d%%",
+    ) / 100.0
+
+    st.divider()
     st.caption("Oracle Cloud ARM üzerinde çalışıyor")
 
 # ── ANA ALAN: SEKMELER ───────────────────────────────────────────────
@@ -96,7 +127,8 @@ with tab1:
     dur_label   = duration_options[duration]
 
     st.info(
-        f"{lang_emoji} **{language.upper()}** · 🎤 {voice_label} · ⏱ {dur_label}",
+        f"{lang_emoji} **{language.upper()}** · 🎤 {voice_label} · ⏱ {dur_label} · "
+        f"🎞️ {transition_options[transition_mode].split(' ')[1]} · 🎵 {int(bgm_volume*100)}%",
         icon="ℹ️",
     )
 
@@ -126,6 +158,9 @@ result = run_documentary(
     target_duration={duration},
     language={repr(language)},
     voice={repr(selected_voice)},
+    transition_mode={repr(transition_mode)},
+    subtitle_color={repr(subtitle_color)},
+    bgm_volume={bgm_volume},
 )
 print(json.dumps(result, ensure_ascii=False))
 """,

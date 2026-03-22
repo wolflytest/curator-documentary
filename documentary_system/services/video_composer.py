@@ -1,27 +1,65 @@
 """
-Video birleştirici — MoneyPrinterTurbo-Extended tarzı MoviePy tabanlı.
+Video birleştirici — MPT-Extended video_effects.py + curator özellikleri.
 
-Özellikler:
-  - Sahne klipleri + TTS sesi birleştirme
-  - Geçişler: fade, dissolve, cut
-  - Arka plan müziği: AudioLoop + 12% ses seviyesi
-  - Karaoke overlay (isteğe bağlı)
-  - Klip çeşitliliği kontrolü (max_video_reuse=2)
+MPT-Extended'dan alınan geçişler (orijinal kod):
+  fadein_transition, fadeout_transition, slidein_transition, slideout_transition
 
-Not: FFmpeg tabanlı concat, codec uyumsuzluklarında MoviePy'a fallback olarak kullanılır.
+Curator eklentileri:
+  - Ken Burns (FFmpegTool üzerinden)
+  - DiversityTracker
+  - Türkçe TTS uyumu
+  - MoviePy → FFmpeg fallback zinciri
+
+Video kalitesi: MPT-Extended standardı (CRF 18, 8000k bitrate, 30fps)
+BGM: 20 MPT-Extended bundled track
 """
 from __future__ import annotations
 
 import logging
 import random
-import re
 import subprocess
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 _TRANSITION_DURATION = 0.5  # saniye
-_BG_MUSIC_VOLUME     = 0.12
+_BG_MUSIC_VOLUME     = 0.20  # MPT-Extended default: 20%
+
+# MPT-Extended video kalite ayarları
+_VIDEO_CRF     = "18"
+_VIDEO_BITRATE = "8000k"
+_VIDEO_FPS     = 30
+_VIDEO_PRESET  = "medium"
+
+
+def _apply_transition(clip, transition: str, duration: float = _TRANSITION_DURATION):
+    """
+    MPT-Extended video_effects.py geçişlerini uygula.
+    Desteklenen: fade, fadein, fadeout, slidein_left, slidein_right,
+                 slidein_top, slidein_bottom, slideout_left, slideout_right,
+                 slideout_top, slideout_bottom, shuffle (rastgele), cut
+    """
+    from documentary_system.services.video_effects import (
+        fadein_transition, fadeout_transition,
+        slidein_transition, slideout_transition,
+    )
+    t = transition.lower()
+    if t in ("fade", "fadein"):
+        clip = fadein_transition(clip, duration)
+    if t in ("fade", "fadeout"):
+        clip = fadeout_transition(clip, duration)
+    elif t.startswith("slidein_"):
+        side = t.replace("slidein_", "") or "left"
+        clip = slidein_transition(clip, duration, side)
+    elif t.startswith("slideout_"):
+        side = t.replace("slideout_", "") or "right"
+        clip = slideout_transition(clip, duration, side)
+    elif t == "shuffle":
+        # Rastgele bir geçiş seç
+        options = ["fadein", "slidein_left", "slidein_right", "slidein_top", "slidein_bottom"]
+        clip = _apply_transition(clip, random.choice(options), duration)
+    # "cut" veya bilinmeyen → geçiş yok
+    return clip
 
 
 def compose_scene(
@@ -32,36 +70,29 @@ def compose_scene(
     transition: str = "cut",
 ) -> Path | None:
     """
-    Video klibine ses ekle, süreyi kırp.
-    transition parametresi şimdilik: 'fade' → başta/sonda kararma, 'cut' → düz.
-
-    Returns:
-        output_path veya None (hata)
+    Video klibine ses ekle, süreyi kırp, MPT-Extended geçişlerini uygula.
+    Video kalitesi: CRF 18, 8000k bitrate, 30fps (MPT-Extended standardı)
     """
     try:
-        from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip
-        from moviepy.video.fx import FadeIn, FadeOut
+        from moviepy import VideoFileClip, AudioFileClip
 
         video = VideoFileClip(str(video_path)).subclipped(0, duration)
         audio = AudioFileClip(str(audio_path))
-
-        # Ses klip uzunluğuyla eşleştir
         video = video.with_audio(audio.subclipped(0, min(audio.duration, duration)))
 
-        if transition == "fade":
-            video = FadeIn(duration=_TRANSITION_DURATION).apply(video)
-            video = FadeOut(duration=_TRANSITION_DURATION).apply(video)
+        if transition != "cut":
+            video = _apply_transition(video, transition)
 
         video.write_videofile(
             str(output_path),
             codec="libx264",
             audio_codec="aac",
-            fps=25,
-            preset="fast",
-            ffmpeg_params=["-pix_fmt", "yuv420p"],
+            fps=_VIDEO_FPS,
+            preset=_VIDEO_PRESET,
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-crf", _VIDEO_CRF, "-b:v", _VIDEO_BITRATE],
             logger=None,
         )
-        log.info("compose_scene tamamlandı: %s (%.1fs)", output_path.name, duration)
+        log.info("compose_scene tamamlandı: %s (%.1fs, geçiş=%s)", output_path.name, duration, transition)
         return output_path
 
     except Exception as exc:
@@ -113,9 +144,9 @@ def concat_clips(
             str(output_path),
             codec="libx264",
             audio_codec="aac",
-            fps=25,
-            preset="fast",
-            ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+            fps=_VIDEO_FPS,
+            preset=_VIDEO_PRESET,
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-crf", _VIDEO_CRF, "-b:v", _VIDEO_BITRATE, "-movflags", "+faststart"],
             logger=None,
         )
         for c in clips:
@@ -175,9 +206,9 @@ def add_background_music(
             str(output_path),
             codec="libx264",
             audio_codec="aac",
-            fps=25,
-            preset="fast",
-            ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+            fps=_VIDEO_FPS,
+            preset=_VIDEO_PRESET,
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-crf", _VIDEO_CRF, "-b:v", _VIDEO_BITRATE, "-movflags", "+faststart"],
             logger=None,
         )
         video.close()
