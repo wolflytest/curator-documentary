@@ -71,6 +71,9 @@ class FFmpegTool(BaseTool):
                 self._clip(input_path, output_path, duration, data)
             elif proc_type == "subtitle":
                 self._subtitle(input_path, output_path, subtitle_text)
+            elif proc_type == "burn_srt":
+                srt_path = Path(data.get("srt_path", ""))
+                self._burn_srt(input_path, output_path, srt_path)
             else:
                 raise ValueError(f"Bilinmeyen işlem tipi: {proc_type}")
 
@@ -189,6 +192,39 @@ class FFmpegTool(BaseTool):
                 str(output_path),
             ],
             check=True, capture_output=True,
+        )
+
+
+    def _burn_srt(
+        self,
+        input_path: Path,
+        output_path: Path,
+        srt_path: Path,
+    ) -> None:
+        """SRT altyazısını video üzerine yak (libass gerektirir)."""
+        if not srt_path.exists():
+            raise FileNotFoundError(f"SRT dosyası bulunamadı: {srt_path}")
+
+        # ffmpeg subtitles filtresi için path'i escape et
+        escaped = str(srt_path).replace("\\", "/").replace(":", "\\\\:")
+        style = (
+            "FontSize=22,Alignment=2,"
+            "PrimaryColour=&HFFFFFF,BackColour=&H80000000,"
+            "BorderStyle=3,Outline=1,Shadow=0,MarginV=20"
+        )
+
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(input_path),
+                "-vf", f"subtitles='{escaped}':force_style='{style}'",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-c:a", "copy",
+                str(output_path),
+            ],
+            check=True, capture_output=True,
+            timeout=180,
         )
 
 

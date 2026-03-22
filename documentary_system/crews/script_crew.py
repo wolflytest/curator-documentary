@@ -1,6 +1,6 @@
 """
-Senaryo ekibi: Creator → Optimizer → Critic (max 3 tur revizyon).
-Her agent ayrı task olarak tanımlanır, sequential process ile çalışır.
+Senaryo ekibi: Creator → Optimizer → Critic (sequential).
+Dil parametresine göre tüm agent/task içerikleri target language'da oluşturulur.
 """
 import logging
 
@@ -10,6 +10,126 @@ from documentary_system.llm_config import get_llm
 
 log = logging.getLogger(__name__)
 
+# ── Dil sabitleri ─────────────────────────────────────────────────────────────
+_LANG = {
+    "tr": {
+        "narration_lang":     "Türkçe",
+        "creator_role":       "Tarihi Belgesel Senarist",
+        "creator_goal":       (
+            "'{topic}' konusunda izleyiciyi ilk 30 saniyede yakalayan, "
+            "BBC/NatGeo kalitesinde Türkçe belgesel senaryosu yaz. "
+            "Yaklaşık {scene_count} sahne, toplam {target_duration} saniye."
+        ),
+        "creator_backstory":  (
+            "15 yıllık belgesel yapım deneyimine sahip, Ken Burns tarzı "
+            "anlatım ustası. Her sahnede görsel-ses uyumunu düşünür. "
+            "Hook olmadan senaryo yazmaz. Tarihi doğruluğa önem verir."
+        ),
+        "optimizer_role":     "YouTube SEO ve İzlenme Uzmanı",
+        "optimizer_goal":     (
+            "Senaristin yazdığı Türkçe senaryonun YouTube algoritmasına "
+            "uygunluğunu artır, hook'ları güçlendir, başlık/açıklamayı SEO için optimize et."
+        ),
+        "optimizer_backstory": (
+            "YouTube algoritması uzmanı. İlk 30 saniye retention takıntısı. "
+            "SEO için doğru keyword'leri ve thumbnail hook'larını bilir."
+        ),
+        "critic_role":        "Baş Editör ve Kalite Denetçisi",
+        "critic_goal":        (
+            "Senaryonun tarihi doğruluğunu, anlatım akışını ve görsel uyum "
+            "potansiyelini denetle. Son JSON çıktısını üret."
+        ),
+        "critic_backstory":   (
+            "20 yıllık editör. Tarihi hata affetmez. "
+            "Çıktıyı her zaman tam ve geçerli JSON olarak verir."
+        ),
+        "creator_task_desc":  (
+            "Konu: {topic}\n"
+            "Hedef süre: {target_duration} saniye ({scene_count} sahne)\n\n"
+            "BBC/NatGeo kalitesinde Türkçe belgesel senaryosu yaz.\n"
+            "Her sahne için şunları belirt:\n"
+            "- Türkçe anlatım metni (narration)\n"
+            "- İngilizce medya arama anahtar kelimeleri (search_keywords — İngilizce olmalı)\n"
+            "- Görsel açıklama: ekranda ne gösterilmeli (visual_description)\n"
+            "- Duygu tonu: dramatic|peaceful|tense|neutral (mood)\n"
+            "- Geçiş türü: fade|cut|dissolve (transition)\n"
+            "- Tahmini süre saniye olarak (duration_sec)\n\n"
+            "İlk sahne güçlü hook, son sahne güçlü kapanış."
+        ),
+        "optimizer_task_desc": (
+            "Konu: {topic}\n\n"
+            "Türkçe senaryoyu al ve şunları optimize et:\n"
+            "1. YouTube başlığı — 60 karakter max, dikkat çekici, keyword içermeli\n"
+            "2. YouTube açıklaması — 500 karakter, SEO optimize\n"
+            "3. YouTube tag'leri — en az 15 tag\n"
+            "4. İlk sahnenin hook'unu güçlendir\n"
+            "5. Sahne sürelerini izleyici davranışına göre optimize et"
+        ),
+        "narration_example":  "Türkçe anlatım metni buraya",
+        "title_example":      "YouTube başlığı (60 karakter max)",
+        "desc_example":       "YouTube açıklaması (500 karakter)",
+        "visual_example":     "Görselde ne olmalı",
+    },
+    "en": {
+        "narration_lang":     "English",
+        "creator_role":       "Historical Documentary Scriptwriter",
+        "creator_goal":       (
+            "Write a BBC/NatGeo-quality English documentary script about '{topic}' "
+            "that hooks the viewer in the first 30 seconds. "
+            "Approximately {scene_count} scenes, total {target_duration} seconds."
+        ),
+        "creator_backstory":  (
+            "15 years of documentary production experience, Ken Burns storytelling style. "
+            "Thinks about visual-audio harmony in every scene. "
+            "Never writes without a hook. Committed to historical accuracy."
+        ),
+        "optimizer_role":     "YouTube SEO and Audience Retention Expert",
+        "optimizer_goal":     (
+            "Optimize the English documentary script for YouTube's algorithm. "
+            "Strengthen hooks, optimize title and description for SEO and CTR."
+        ),
+        "optimizer_backstory": (
+            "YouTube algorithm specialist obsessed with first-30-second retention. "
+            "Knows which hooks keep viewers watching and which titles get clicks."
+        ),
+        "critic_role":        "Senior Editor and Quality Controller",
+        "critic_goal":        (
+            "Review the script for historical accuracy, narrative flow, and visual "
+            "alignment potential. Produce the final JSON output."
+        ),
+        "critic_backstory":   (
+            "20-year veteran editor. Does not forgive historical errors. "
+            "Always delivers output as complete, valid JSON."
+        ),
+        "creator_task_desc":  (
+            "Topic: {topic}\n"
+            "Target duration: {target_duration} seconds ({scene_count} scenes)\n\n"
+            "Write a BBC/NatGeo-quality English documentary script.\n"
+            "For each scene specify:\n"
+            "- English narration text (narration)\n"
+            "- English media search keywords (search_keywords)\n"
+            "- Visual description: what should be shown on screen (visual_description)\n"
+            "- Emotional tone: dramatic|peaceful|tense|neutral (mood)\n"
+            "- Transition type: fade|cut|dissolve (transition)\n"
+            "- Estimated duration in seconds (duration_sec)\n\n"
+            "First scene: strong hook. Last scene: strong closing."
+        ),
+        "optimizer_task_desc": (
+            "Topic: {topic}\n\n"
+            "Take the English script and optimize:\n"
+            "1. YouTube title — max 60 characters, attention-grabbing, keyword-rich\n"
+            "2. YouTube description — 500 characters, SEO optimized\n"
+            "3. YouTube tags — at least 15 tags\n"
+            "4. Strengthen the first scene's hook\n"
+            "5. Optimize scene durations based on viewer behavior patterns"
+        ),
+        "narration_example":  "English narration text here",
+        "title_example":      "YouTube title (max 60 characters)",
+        "desc_example":       "YouTube description (500 characters)",
+        "visual_example":     "What should be shown on screen",
+    },
+}
+
 
 def create_script_crew(
     topic: str,
@@ -18,120 +138,77 @@ def create_script_crew(
 ) -> tuple[Crew, Task]:
     """
     Senaryo üretim ekibini oluştur.
-    Returns: (crew, critic_task) — crew.kickoff() sonrası critic_task.output okunur.
+    language="tr" → Türkçe senaryo, language="en" → English script
+    Returns: (crew, critic_task)
     """
     llm = get_llm()
     scene_count = max(5, target_duration // 7)
-    lang_label = "Türkçe" if language == "tr" else "English"
+    L = _LANG.get(language, _LANG["tr"])
 
-    # AGENT 1: Senarist
+    def _fmt(tmpl: str) -> str:
+        return tmpl.format(topic=topic, scene_count=scene_count, target_duration=target_duration)
+
+    # ── Agent 1: Senarist / Scriptwriter ────────────────────────────────────
     creator = Agent(
-        role="Tarihi Belgesel Senarist",
-        goal=(
-            f"'{topic}' konusunda izleyiciyi ilk 30 saniyede yakalayan, "
-            f"BBC/NatGeo kalitesinde {lang_label} belgesel senaryosu yaz. "
-            f"Yaklaşık {scene_count} sahne, toplam {target_duration} saniye."
-        ),
-        backstory=(
-            "15 yıllık belgesel yapım deneyimine sahip, Ken Burns tarzı "
-            "anlatım ustası. Her sahnede görsel-ses uyumunu düşünürsün. "
-            "Hook olmadan senaryo yazmaz, her cümle izleyiciyi bağlar. "
-            "Tarihi doğruluğa önem verirsin."
-        ),
+        role=L["creator_role"],
+        goal=_fmt(L["creator_goal"]),
+        backstory=L["creator_backstory"],
         llm=llm,
         verbose=True,
         max_iter=3,
     )
 
-    # AGENT 2: SEO ve İzlenme Uzmanı
+    # ── Agent 2: SEO Uzmanı ──────────────────────────────────────────────────
     optimizer = Agent(
-        role="YouTube SEO ve İzlenme Uzmanı",
-        goal=(
-            "Senaristin yazdığı senaryonun YouTube algoritmasına uygunluğunu "
-            "artır, izlenme süresi ve CTR'ı optimize et. "
-            "Hook'ları güçlendir, başlık ve açıklamayı SEO için optimize et."
-        ),
-        backstory=(
-            "YouTube algoritması uzmanı. Hangi hook'ların izleyiciyi tuttuğunu, "
-            "hangi başlıkların tıklandığını verilere dayalı bilirsin. "
-            "İlk 30 saniye retention takıntısısın. "
-            "SEO için doğru keyword'leri bilirsin."
-        ),
+        role=L["optimizer_role"],
+        goal=_fmt(L["optimizer_goal"]),
+        backstory=L["optimizer_backstory"],
         llm=llm,
         verbose=True,
         max_iter=3,
     )
 
-    # AGENT 3: Baş Editör ve Eleştirmen
+    # ── Agent 3: Editör / Editor ─────────────────────────────────────────────
     critic = Agent(
-        role="Baş Editör ve Kalite Denetçisi",
-        goal=(
-            "Senaryonun tarihi doğruluğunu, anlatım akışını ve görsel uyum "
-            "potansiyelini denetle. Son JSON çıktısını üret."
-        ),
-        backstory=(
-            "20 yıllık editör. Zayıf senaryoları ilk cümlede fark eder. "
-            "Tarihi hata affetmez. Ama iyi işi de teslim etmesini bilir. "
-            "Çıktıyı her zaman tam ve geçerli JSON olarak verir."
-        ),
+        role=L["critic_role"],
+        goal=_fmt(L["critic_goal"]),
+        backstory=L["critic_backstory"],
         llm=llm,
         verbose=True,
         max_iter=3,
     )
 
-    # TASK 1: Senaryo Yazımı
+    # ── Task 1: Senaryo yazımı ───────────────────────────────────────────────
     creator_task = Task(
-        description=(
-            f"Konu: {topic}\n"
-            f"Hedef süre: {target_duration} saniye ({scene_count} sahne)\n\n"
-            f"BBC/NatGeo kalitesinde {lang_label} belgesel senaryosu yaz.\n"
-            "Her sahne için şunları belirt:\n"
-            f"- {lang_label} anlatım metni (narration)\n"
-            "- İngilizce medya arama anahtar kelimeleri (search_keywords)\n"
-            "- Görsel açıklama: ekranda ne gösterilmeli (visual_description)\n"
-            "- Duygu tonu: dramatic|peaceful|tense|neutral (mood)\n"
-            "- Geçiş türü: fade|cut|dissolve (transition)\n"
-            "- Tahmini süre saniye olarak (duration_sec)\n\n"
-            "İlk sahne güçlü bir hook ile başlamalı. "
-            "Son sahne güçlü bir kapanışla bitmeli."
-        ),
+        description=_fmt(L["creator_task_desc"]),
         expected_output=(
-            f"{scene_count}-scene {lang_label} documentary script. "
-            "Each scene: narration, search_keywords, visual_description, mood, transition, duration_sec."
+            f"{scene_count}-scene {L['narration_lang']} documentary script with "
+            "narration, search_keywords, visual_description, mood, transition, duration_sec per scene."
         ),
         agent=creator,
     )
 
-    # TASK 2: SEO Optimizasyonu
+    # ── Task 2: SEO optimizasyonu ────────────────────────────────────────────
     optimizer_task = Task(
-        description=(
-            f"Konu: {topic}\n\n"
-            "Senaristin yazdığı senaryoyu al ve şunları optimize et:\n"
-            "1. YouTube başlığı — 60 karakter max, dikkat çekici, keyword içermeli\n"
-            "2. YouTube açıklaması — 500 karakter, SEO için optimize\n"
-            "3. YouTube tag'leri — en az 15 tag\n"
-            "4. İlk sahnenin hook'unu güçlendir\n"
-            "5. Sahne sürelerini izleyici davranışına göre optimize et\n\n"
-            "Senaryonun tarihi içeriğini değiştirme, sadece SEO ve anlatımı güçlendir."
-        ),
+        description=_fmt(L["optimizer_task_desc"]),
         expected_output=(
-            "SEO optimize edilmiş başlık, açıklama, tag listesi ve "
-            "güçlendirilmiş hook ile güncellenmiş sahne listesi."
+            f"SEO-optimized title, description, tags list and updated scene list "
+            f"with stronger hook (all in {L['narration_lang']})."
         ),
         agent=optimizer,
         context=[creator_task],
     )
 
-    # TASK 3: Kalite Kontrolü ve Final JSON
+    # ── Task 3: Kalite kontrolü + Final JSON ─────────────────────────────────
     critic_task = Task(
         description=(
-            f"Konu: {topic}\n\n"
-            "Senarist ve optimizer'ın çalışmalarını değerlendir. "
-            "Tarihi doğruluk, anlatım akışı ve görsel uyumu kontrol et.\n\n"
-            "ÇIKTI FORMAT — sadece geçerli JSON, başka hiçbir şey yazma:\n"
+            f"Topic: {topic}\n\n"
+            "Review the scriptwriter's and optimizer's work. "
+            "Check historical accuracy, narrative flow, and visual alignment.\n\n"
+            "OUTPUT FORMAT — valid JSON only, nothing else:\n"
             "{\n"
-            '  "title": "YouTube başlığı (60 karakter max)",\n'
-            '  "description": "YouTube açıklaması (500 karakter)",\n'
+            f'  "title": "{L["title_example"]}",\n'
+            f'  "description": "{L["desc_example"]}",\n'
             '  "tags": ["tag1", "tag2"],\n'
             '  "revision_count": 0,\n'
             '  "approved": true,\n'
@@ -139,9 +216,9 @@ def create_script_crew(
             '  "scenes": [\n'
             '    {\n'
             '      "index": 0,\n'
-            f'      "narration": "{lang_label} narration text",\n'
+            f'      "narration": "{L["narration_example"]}",\n'
             '      "search_keywords": ["english", "keyword"],\n'
-            '      "visual_description": "Görselde ne olmalı",\n'
+            f'      "visual_description": "{L["visual_example"]}",\n'
             '      "mood": "dramatic",\n'
             '      "transition": "fade",\n'
             '      "duration_sec": 7.0\n'
@@ -149,7 +226,7 @@ def create_script_crew(
             '  ]\n'
             "}"
         ),
-        expected_output="Geçerli JSON formatında belgesel senaryosu",
+        expected_output="Valid JSON documentary script",
         agent=critic,
         context=[creator_task, optimizer_task],
     )
@@ -165,7 +242,7 @@ def create_script_crew(
 
 
 if __name__ == "__main__":
-    crew, task = create_script_crew("Osmanlı İmparatorluğu'nun Yükselişi", target_duration=60)
-    print("✅ Script crew oluşturuldu")
-    print(f"   Ajanlar: {[a.role for a in crew.agents]}")
-    print(f"   Görevler: {len(crew.tasks)}")
+    crew_tr, _ = create_script_crew("Osmanlı İmparatorluğu'nun Yükselişi", target_duration=60, language="tr")
+    crew_en, _ = create_script_crew("Rise of the Ottoman Empire", target_duration=60, language="en")
+    print("✅ TR crew:", [a.role for a in crew_tr.agents])
+    print("✅ EN crew:", [a.role for a in crew_en.agents])
