@@ -15,6 +15,7 @@ GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
 PEXELS_API_KEY: str = os.environ["PEXELS_API_KEY"]
 PIXABAY_API_KEY: str = os.getenv("PIXABAY_API_KEY", "")
 SILICONFLOW_API_KEY: str = os.getenv("SILICONFLOW_API_KEY", "")
+ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
 
 # Geçici dosyalar için dizin (700: sadece bot process erişebilir)
 TMP_DIR = Path("/tmp/curator")
@@ -44,10 +45,9 @@ CHAT_CONTEXT_LIMIT = 50
 OPENCLAW_DIR = Path(__file__).parent / "openclaw_knowledge"
 OPENCLAW_DIR.mkdir(exist_ok=True)
 
-# TTS ses seçenekleri: dil → {ses_kodu: etiket}
-TTS_VOICES: dict[str, dict[str, str]] = {
+# Kokoro ONNX sesleri (yerel, hızlı) — kokoro-v1.0.int8.onnx gerekli
+KOKORO_VOICES: dict[str, dict[str, str]] = {
     "en": {
-        # Kokoro edge_tts sesleri
         "bm_george":  "🎙 George (İngiliz Erkek) - Belgesel",
         "bm_daniel":  "🎙 Daniel (İngiliz Erkek) - Haber",
         "bm_lewis":   "🎙 Lewis (İngiliz Erkek) - Dramatik",
@@ -56,14 +56,43 @@ TTS_VOICES: dict[str, dict[str, str]] = {
         "bf_emma":    "🎙 Emma (İngiliz Kadın) - Zarif",
         "af_bella":   "🎙 Bella (ABD Kadın) - Sıcak",
         "af_nova":    "🎙 Nova (ABD Kadın) - Enerjik",
-        # Chatterbox TTS (ses klonlama) — chatterbox-tts kurulu olmalı
+    },
+}
+
+# Microsoft edge_tts sesleri (ücretsiz cloud, İngilizce)
+EDGE_TTS_VOICES: dict[str, dict[str, str]] = {
+    "en": {
+        "en-GB-RyanNeural":      "☁️ Ryan (İngiliz Erkek) - Belgesel",
+        "en-GB-ThomasNeural":    "☁️ Thomas (İngiliz Erkek) - Haber",
+        "en-US-GuyNeural":       "☁️ Guy (ABD Erkek) - Nötr",
+        "en-US-ChristopherNeural": "☁️ Christopher (ABD Erkek) - Otoriter",
+        "en-GB-SoniaNeural":     "☁️ Sonia (İngiliz Kadın) - Zarif",
+        "en-US-JennyNeural":     "☁️ Jenny (ABD Kadın) - Sıcak",
+        "en-US-AriaNeural":      "☁️ Aria (ABD Kadın) - Enerjik",
+    },
+}
+
+# ElevenLabs TTS sesleri (yüksek kalite cloud, ELEVENLABS_API_KEY gerekli)
+ELEVENLABS_VOICES: dict[str, dict[str, str]] = {
+    "en": {
+        "elevenlabs:Adam":    "⭐ Adam (Erkek) - Belgesel Kalite",
+        "elevenlabs:Antoni":  "⭐ Antoni (Erkek) - Dramatik",
+        "elevenlabs:Arnold":  "⭐ Arnold (Erkek) - Güçlü",
+        "elevenlabs:Rachel":  "⭐ Rachel (Kadın) - Doğal",
+        "elevenlabs:Domi":    "⭐ Domi (Kadın) - Enerjik",
+    },
+}
+
+# Dashboard için birleşik TTS_VOICES (hepsi bir arada)
+TTS_VOICES: dict[str, dict[str, str]] = {
+    "en": {
+        **KOKORO_VOICES["en"],
+        **EDGE_TTS_VOICES["en"],
+        **ELEVENLABS_VOICES["en"],
         "chatterbox:default:Default Voice-Neutral": "🔬 Chatterbox (Varsayılan)",
         "chatterbox:clone:Voice Clone-Custom":      "🔬 Chatterbox (Ses Klonlama)",
-        # SiliconFlow CosyVoice2 — SILICONFLOW_API_KEY gerekli
-        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:alex-Male":    "☁️ SiliconFlow Alex (Erkek)",
-        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:anna-Female":   "☁️ SiliconFlow Anna (Kadın)",
-        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:bella-Female":  "☁️ SiliconFlow Bella (Kadın)",
-        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:david-Male":    "☁️ SiliconFlow David (Erkek)",
+        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:alex-Male":   "☁️ SiliconFlow Alex (Erkek)",
+        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:anna-Female":  "☁️ SiliconFlow Anna (Kadın)",
     },
     "tr": {
         "gtts_tr": "🎙 Türkçe (gTTS)",

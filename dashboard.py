@@ -207,6 +207,50 @@ print(json.dumps(result, ensure_ascii=False))
                         col_b.metric("⭐ QA Skoru", f"{result['qa_score']:.1f}/10")
                         col_c.metric("📁 Durum",    result["status"].upper())
 
+                        # QA skor rengi
+                        qa_score = result.get("qa_score", 0)
+                        if qa_score >= 9.0:
+                            st.success(f"✅ QA Skoru: {qa_score:.1f}/10 — Yayın Kalitesi")
+                        elif qa_score >= 7.0:
+                            st.warning(f"⚠️ QA Skoru: {qa_score:.1f}/10 — İyileştirme Önerildi")
+                        else:
+                            st.error(f"❌ QA Skoru: {qa_score:.1f}/10 — Revizyon Gerekli")
+
+                        # Skor breakdown
+                        breakdown = result.get("score_breakdown", {})
+                        if breakdown:
+                            st.write("**📊 Skor Detayı:**")
+                            bd_cols = st.columns(5)
+                            labels = [
+                                ("🎭 Engagement", "engagement"),
+                                ("✅ Doğruluk", "accuracy"),
+                                ("🎬 Görsel", "visual_sync"),
+                                ("✍️ Anlatım", "narrative"),
+                                ("⚙️ Teknik", "technical"),
+                            ]
+                            for col, (label, key) in zip(bd_cols, labels):
+                                val = breakdown.get(key, "-")
+                                col.metric(label, f"{val:.1f}" if isinstance(val, float) else val)
+
+                        # QA notları
+                        qa_notes = result.get("qa_notes", {})
+                        if any(qa_notes.values()):
+                            with st.expander("📝 QA Notları — Neden Bu Skoru Aldı?"):
+                                if qa_notes.get("viewer"):
+                                    st.write("**🎭 İzleyici Deneyimi:**", qa_notes["viewer"])
+                                if qa_notes.get("accuracy"):
+                                    st.write("**✅ Doğruluk:**", qa_notes["accuracy"])
+                                if qa_notes.get("visual"):
+                                    st.write("**🎬 Görsel Uyum:**", qa_notes["visual"])
+                                if qa_notes.get("narrative"):
+                                    st.write("**✍️ Anlatım:**", qa_notes["narrative"])
+                                if qa_notes.get("technical"):
+                                    st.write("**⚙️ Teknik Sorunlar:**")
+                                    for issue in qa_notes["technical"]:
+                                        st.write(f"  - {issue}")
+                                if qa_notes.get("revision"):
+                                    st.info(f"💡 **Revizyon Önerileri:**\n{qa_notes['revision']}")
+
                         st.subheader(f"📹 {result['title']}")
 
                         output_path = Path(result["output_path"])

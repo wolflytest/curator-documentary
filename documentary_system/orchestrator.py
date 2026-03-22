@@ -356,27 +356,48 @@ def run_documentary(
 
         # ── 6. QA ─────────────────────────────────────────────────────────────
         _update_status(state, "qa")
-        qa_crew  = create_qa_crew(state)
+        qa_crew   = create_qa_crew(state)
         qa_result = qa_crew.kickoff()
         try:
             qa_data = _extract_json(qa_result.raw)
         except Exception:
-            qa_data = {"overall_score": 5.0, "approved": True, "technical_issues": []}
+            qa_data = {
+                "overall_score": 5.0, "approved": True,
+                "score_breakdown": {}, "viewer_notes": "",
+                "accuracy_notes": "", "visual_notes": "",
+                "narrative_notes": "", "technical_issues": [],
+                "revision_needed": False, "revision_instructions": "",
+            }
 
-        qa_score = float(qa_data.get("overall_score", 5.0))
-        log.info("[#%d] QA: skor=%.1f", doc_id, qa_score)
+        qa_score     = float(qa_data.get("overall_score", 5.0))
+        qa_approved  = qa_data.get("approved", True)
+        qa_breakdown = qa_data.get("score_breakdown", {})
+        qa_notes = {
+            "viewer":    qa_data.get("viewer_notes", ""),
+            "accuracy":  qa_data.get("accuracy_notes", ""),
+            "visual":    qa_data.get("visual_notes", ""),
+            "narrative": qa_data.get("narrative_notes", ""),
+            "technical": qa_data.get("technical_issues", []),
+            "revision":  qa_data.get("revision_instructions", ""),
+        }
+        log.info("[#%d] QA: skor=%.1f approved=%s", doc_id, qa_score, qa_approved)
+        if qa_data.get("revision_needed"):
+            log.warning("[#%d] QA revision gerekli: %s", doc_id, qa_data.get("revision_instructions", "")[:200])
 
-        # ── 7. Tamamlandı ─────────────────────────────────────────────────────
+        # ── 7. Tamamlandı ─────────────────────────────────────────────────
         _update_status(state, "done")
         db.update_documentary_status(doc_id, "done", output_path=str(output_path))
 
         return {
-            "doc_id":       doc_id,
-            "title":        state.title,
-            "output_path":  str(output_path),
-            "scene_count":  len(state.scenes),
-            "qa_score":     qa_score,
-            "status":       "done",
+            "doc_id":         doc_id,
+            "title":          state.title,
+            "output_path":    str(output_path),
+            "scene_count":    len(state.scenes),
+            "qa_score":       qa_score,
+            "qa_approved":    qa_approved,
+            "score_breakdown": qa_breakdown,
+            "qa_notes":       qa_notes,
+            "status":         "done",
         }
 
     except Exception as exc:

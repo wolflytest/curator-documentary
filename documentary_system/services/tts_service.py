@@ -187,6 +187,55 @@ def _probe_duration(path: Path) -> float:
         return 0.0
 
 
+# ── ElevenLabs TTS ────────────────────────────────────────────────────────────
+
+def _elevenlabs_tts(text: str, voice: str, output_path: Path) -> TTSResult:
+    """
+    ElevenLabs TTS API — yüksek kaliteli neural TTS.
+    voice formatı: "elevenlabs:Adam" veya "elevenlabs:<voice_id>"
+    ELEVENLABS_API_KEY env değişkeni gereklidir. Ücretsiz: 10.000 karakter/ay.
+    """
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        return TTSResult(success=False, error="ELEVENLABS_API_KEY ayarlanmamış")
+
+    voice_name = voice.split(":", 1)[1] if ":" in voice else "Adam"
+
+    # Bilinen ses adı → ID eşlemesi
+    _voice_ids = {
+        "Adam":    "pNInz6obpgDQGcFmaJgB",
+        "Antoni":  "ErXwobaYiN019PkySvjV",
+        "Arnold":  "VR6AewLTigWG4xSOukaG",
+        "Rachel":  "21m00Tcm4TlvDq8ikWAM",
+        "Domi":    "AZnzlk1XvdvUeBnXmlld",
+    }
+    voice_id = _voice_ids.get(voice_name, voice_name)  # doğrudan ID de olabilir
+
+    try:
+        import requests as _req
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        headers = {
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+        payload = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+        }
+        resp = _req.post(url, json=payload, headers=headers, timeout=60)
+        if resp.status_code == 200:
+            output_path.write_bytes(resp.content)
+            duration = _probe_duration(output_path)
+            log.info("ElevenLabs TTS tamamlandı: %s (%.1fs)", output_path.name, duration)
+            return TTSResult(success=True, audio_path=str(output_path), duration_sec=duration)
+        log.warning("ElevenLabs %d: %s", resp.status_code, resp.text[:200])
+        return TTSResult(success=False, error=f"ElevenLabs HTTP {resp.status_code}")
+    except Exception as exc:
+        return TTSResult(success=False, error=str(exc))
+
+
 # ── Siliconflow TTS (MPT-Extended) ────────────────────────────────────────────
 
 def _siliconflow_tts(text: str, voice: str, output_path: Path) -> TTSResult:
@@ -463,11 +512,27 @@ def synthesize(
             log.warning("SiliconFlow başarısız, edge_tts'e geçiliyor: %s", result.error)
             result = _run_edge_tts(text, "en-US-GuyNeural", output_path)
 
-    elif language == "en":
-        result = _run_edge_tts(text, voice, output_path)
+    elif voice.startswith("elevenlabs:"):
+        result = _elevenlabs_tts(text, voice, output_path)
         if not result.success:
-            log.warning("edge_tts başarısız, Kokoro'ya geçiliyor: %s", result.error)
+            log.warning("ElevenLabs başarısız, edge_tts'e geçiliyor: %s", result.error)
+            result = _run_edge_tts(text, "en-GB-RyanNeural", output_path)
+
+    elif language == "en":
+        # Kokoro ses kodu mu (bm_, am_, bf_, af_ ile başlar)?
+        _is_kokoro = any(voice.startswith(p) for p in ("bm_", "am_", "bf_", "af_"))
+        if _is_kokoro:
+            # Önce Kokoro dene (doğru ses kodu ile)
             result = _kokoro_tts(text, output_path, voice)
+            if not result.success:
+                log.warning("Kokoro başarısız, edge_tts varsayılan sesle devam: %s", result.error)
+                result = _run_edge_tts(text, "en-GB-RyanNeural", output_path)
+        else:
+            # edge_tts ses kodu (en-GB-RyanNeural gibi)
+            result = _run_edge_tts(text, voice, output_path)
+            if not result.success:
+                log.warning("edge_tts başarısız, Kokoro varsayılan sesle devam: %s", result.error)
+                result = _kokoro_tts(text, output_path, "bm_george")
     else:
         # Türkçe: Kokoro → gTTS
         result = _kokoro_tts(text, output_path, voice="bf_emma")

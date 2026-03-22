@@ -41,7 +41,10 @@ _LANG = {
         ),
         "critic_backstory":   (
             "20 yıllık editör. Tarihi hata affetmez. "
-            "Çıktıyı her zaman tam ve geçerli JSON olarak verir."
+            "BBC World Service kalite standartlarını uygular. "
+            "Çıktı her zaman tam ve geçerli JSON. "
+            "Zayıf bir sahne için 'bu kabul edilemez' der ve yeniden yazılmasını ister. "
+            "Minimum kalite standardı: her sahne görsel-ses uyumlu, her narration canlı ve özgün olmalı."
         ),
         "creator_task_desc":  (
             "Konu: {topic}\n"
@@ -98,8 +101,11 @@ _LANG = {
             "alignment potential. Produce the final JSON output."
         ),
         "critic_backstory":   (
-            "20-year veteran editor. Does not forgive historical errors. "
-            "Always delivers output as complete, valid JSON."
+            "20 yıllık editör. Tarihi hata affetmez. "
+            "BBC World Service kalite standartlarını uygular. "
+            "Çıktı her zaman tam ve geçerli JSON. "
+            "Zayıf bir sahne için 'bu kabul edilemez' der ve yeniden yazılmasını ister. "
+            "Minimum kalite standardı: her sahne görsel-ses uyumlu, her narration canlı ve özgün olmalı."
         ),
         "creator_task_desc":  (
             "Topic: {topic}\n"
@@ -155,7 +161,7 @@ def create_script_crew(
         backstory=L["creator_backstory"],
         llm=llm,
         verbose=True,
-        max_iter=3,
+        max_iter=4,
     )
 
     # ── Agent 2: SEO Uzmanı ──────────────────────────────────────────────────
