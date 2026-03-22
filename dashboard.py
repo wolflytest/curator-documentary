@@ -1,233 +1,230 @@
 """
-Streamlit web arayüzü: belgesel üretimi ve geçmiş görüntüleme.
-Çalıştır: streamlit run dashboard.py
+Streamlit Web Dashboard — Belgesel Stüdyosu
+Çalıştır: streamlit run dashboard.py --server.port 8501
 """
 import json
 import subprocess
-import threading
+import sys
 import time
 from pathlib import Path
 
 import streamlit as st
 
-import db
-from config import TTS_VOICES, VIDEO_DURATIONS
-from documentary_system import orchestrator
+# Proje path'ini ekle
+sys.path.insert(0, str(Path(__file__).parent))
 
-# ── Sayfa ayarları ────────────────────────────────────────────────────────────
+import db
+import config
+
+db.init_db()
+
+# ── SAYFA AYARLARI ──────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Küratör — Belgesel Stüdyosu",
+    page_title="🎬 Belgesel Stüdyosu",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-db.init_db()
+st.title("🎬 Belgesel Stüdyosu")
 
-# ── Yan menü ─────────────────────────────────────────────────────────────────
+# ── SIDEBAR: AYARLAR ─────────────────────────────────────────────────
 with st.sidebar:
-    st.title("🎬 Belgesel Stüdyosu")
-    page = st.radio(
-        "Sayfa",
-        ["Yeni Belgesel", "Geçmiş", "İstatistikler"],
-        label_visibility="collapsed",
+    st.header("⚙️ Ayarlar")
+
+    # Dil seçimi
+    language = st.selectbox(
+        "🌍 Dil",
+        options=["tr", "en"],
+        format_func=lambda x: "🇹🇷 Türkçe" if x == "tr" else "🇬🇧 İngilizce",
+        index=0,
     )
+
+    # Dile göre ses seçimi
+    voices = config.TTS_VOICES.get(language, {})
+    voice_keys   = list(voices.keys())
+    voice_labels = list(voices.values())
+
+    voice_idx = st.selectbox(
+        "🎤 Ses",
+        options=range(len(voice_keys)),
+        format_func=lambda i: voice_labels[i],
+        index=0,
+    )
+    selected_voice = voice_keys[voice_idx]
+
+    # Ses örneği linki
+    if language == "en":
+        st.markdown(
+            "💡 [Sesleri Dinle →](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)",
+            unsafe_allow_html=True,
+        )
+
+    # Video süresi
+    duration_options = {int(k): v for k, v in config.VIDEO_DURATIONS.items()}
+    duration = st.select_slider(
+        "⏱ Video Süresi",
+        options=sorted(duration_options.keys()),
+        value=600,
+        format_func=lambda x: duration_options[x],
+    )
+
     st.divider()
-    st.caption("Küratör v1.0 · CrewAI + Kokoro TTS")
+    st.caption("Oracle Cloud ARM üzerinde çalışıyor")
 
+# ── ANA ALAN: SEKMELER ───────────────────────────────────────────────
+tab1, tab2 = st.tabs(["🎬 Yeni Belgesel", "📋 Geçmiş"])
 
-# ── YENİ BELGESEL ─────────────────────────────────────────────────────────────
-if page == "Yeni Belgesel":
-    st.header("🎬 Yeni Belgesel Üret")
-
-    col1, col2 = st.columns([2, 1])
+# ── SEKME 1: YENİ BELGESEL ──────────────────────────────────────────
+with tab1:
+    col1, col2 = st.columns([3, 1])
 
     with col1:
         topic = st.text_input(
-            "Belgesel Konusu",
+            "📌 Belgesel Konusu",
             placeholder="Örn: Osmanlı İmparatorluğu'nun Yükselişi",
-            help="Belgesel konusunu giriniz. Ne kadar spesifik, o kadar iyi.",
         )
 
     with col2:
-        language = st.selectbox(
-            "Anlatım Dili",
-            options=["tr", "en"],
-            format_func=lambda x: "🇹🇷 Türkçe" if x == "tr" else "🇬🇧 İngilizce",
-        )
+        st.write("")
+        st.write("")
+        start_btn = st.button("🎬 Üretimi Başlat", type="primary", use_container_width=True)
 
-    col3, col4 = st.columns(2)
-    with col3:
-        voice_label = st.selectbox("Ses", options=list(TTS_VOICES.keys()))
-        voice_code = TTS_VOICES[voice_label]
+    # Ayar özeti
+    lang_emoji  = "🇹🇷" if language == "tr" else "🇬🇧"
+    voice_label = voices.get(selected_voice, selected_voice)
+    dur_label   = duration_options[duration]
 
-    with col4:
-        dur_label = st.selectbox("Hedef Süre", options=list(VIDEO_DURATIONS.keys()))
-        duration_secs = VIDEO_DURATIONS[dur_label]
+    st.info(
+        f"{lang_emoji} **{language.upper()}** · 🎤 {voice_label} · ⏱ {dur_label}",
+        icon="ℹ️",
+    )
 
-    st.divider()
-
-    if st.button("🚀 Belgesel Üret", type="primary", disabled=not topic.strip()):
+    if start_btn:
         if not topic.strip():
-            st.error("Lütfen bir konu girin.")
+            st.error("❌ Lütfen bir konu girin.")
         else:
-            progress_bar = st.progress(0, text="Başlatılıyor...")
-            status_box   = st.empty()
-            result_box   = st.empty()
+            st.divider()
+            progress_area = st.empty()
+            log_area      = st.empty()
 
-            stages = [
-                (15, "scripting",   "📝 Senaryo yazılıyor..."),
-                (40, "searching",   "🔍 Medya aranıyor..."),
-                (70, "assembling",  "🎞 Sahneler birleştiriliyor..."),
-                (90, "qa",          "✅ Kalite kontrolü..."),
-                (100, "done",       "🎉 Tamamlandı!"),
-            ]
+            with st.spinner(f"🎬 '{topic}' belgesi üretiliyor..."):
+                progress_area.progress(0, text="Başlatılıyor...")
 
-            _result: dict = {}
-            _error:  list = []
-
-            def _run() -> None:
                 try:
-                    _result.update(orchestrator.run_documentary(
-                        topic.strip(), duration_secs, language, voice_code
-                    ))
-                except Exception as exc:  # noqa: BLE001
-                    _error.append(str(exc))
+                    # Orchestrator'ı subprocess olarak çalıştır
+                    # (Streamlit'in event loop'u ile çakışmasın)
+                    cmd = [
+                        sys.executable, "-c",
+                        f"""
+import sys; sys.path.insert(0, '.')
+import db, json
+db.init_db()
+from documentary_system.orchestrator import run_documentary
+result = run_documentary(
+    topic={repr(topic.strip())},
+    target_duration={duration},
+    language={repr(language)},
+    voice={repr(selected_voice)},
+)
+print(json.dumps(result, ensure_ascii=False))
+""",
+                    ]
 
-            thread = threading.Thread(target=_run, daemon=True)
-            thread.start()
+                    progress_area.progress(10, text="⚙️ Sistem hazırlanıyor...")
 
-            stage_idx = 0
-            while thread.is_alive():
-                if stage_idx < len(stages) - 1:
-                    pct, stage_key, stage_msg = stages[stage_idx]
-                    # Gerçek DB durumunu kontrol et
-                    docs = db.list_documentaries(limit=1)
-                    if docs:
-                        current_status = docs[0].get("status", "")
-                        for i, (p, k, m) in enumerate(stages):
-                            if k == current_status and i >= stage_idx:
-                                stage_idx = i
-                                break
-                    pct, _, stage_msg = stages[stage_idx]
-                    progress_bar.progress(pct, text=stage_msg)
-                time.sleep(3)
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        cwd=str(Path(__file__).parent),
+                    )
 
-            thread.join()
+                    progress_area.progress(20, text="📝 Senaryo yazılıyor...")
 
-            if _error:
-                progress_bar.empty()
-                st.error(f"❌ Hata: {_error[0]}")
-            elif _result:
-                progress_bar.progress(100, text="🎉 Tamamlandı!")
-                out_path = Path(_result.get("output_path", ""))
-                st.success(f"✅ **{_result['title']}** oluşturuldu!")
+                    # Sonucu bekle (timeout: 30 dakika)
+                    stdout, stderr = process.communicate(timeout=1800)
 
-                info_col1, info_col2, info_col3 = st.columns(3)
-                info_col1.metric("Sahne Sayısı", _result.get("scene_count", "—"))
-                info_col2.metric("QA Skoru", f"{_result.get('qa_score', 0):.1f}/10")
-                info_col3.metric("Süre (hedef)", dur_label)
+                    if process.returncode == 0:
+                        # Son satır JSON sonucu
+                        lines       = stdout.strip().split("\n")
+                        result_json = lines[-1]
+                        result      = json.loads(result_json)
 
-                if out_path.exists():
-                    st.video(str(out_path))
-                    with open(out_path, "rb") as f:
-                        st.download_button(
-                            "⬇️ MP4 İndir",
-                            data=f,
-                            file_name=out_path.name,
-                            mime="video/mp4",
-                        )
-                else:
-                    st.info(f"Dosya: `{out_path}`")
+                        progress_area.progress(100, text="✅ Tamamlandı!")
 
+                        st.success("🎉 Belgesel hazır!")
 
-# ── GEÇMİŞ ───────────────────────────────────────────────────────────────────
-elif page == "Geçmiş":
-    st.header("📚 Belgesel Geçmişi")
+                        col_a, col_b, col_c = st.columns(3)
+                        col_a.metric("🎬 Sahne",    result["scene_count"])
+                        col_b.metric("⭐ QA Skoru", f"{result['qa_score']:.1f}/10")
+                        col_c.metric("📁 Durum",    result["status"].upper())
 
-    docs = db.list_documentaries(limit=50)
-    if not docs:
-        st.info("Henüz belgesel üretilmemiş.")
-    else:
-        status_icons = {"done": "✅", "error": "❌", "pending": "⏳", "scripting": "📝",
-                        "searching": "🔍", "assembling": "🎞", "qa": "🔬"}
+                        st.subheader(f"📹 {result['title']}")
 
-        for doc in docs:
-            icon = status_icons.get(doc["status"], "🔄")
-            with st.expander(f"{icon} [{doc['id']}] {doc['topic']} — {doc['created_at'][:16]}"):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.write(f"**Durum:** {doc['status']}")
-                    if doc.get("error_msg"):
-                        st.error(f"Hata: {doc['error_msg']}")
-                    if doc.get("output_path"):
-                        out_path = Path(doc["output_path"])
-                        if out_path.exists():
-                            st.video(str(out_path))
-                            with open(out_path, "rb") as f:
+                        output_path = Path(result["output_path"])
+                        if output_path.exists():
+                            st.video(str(output_path))
+                            with open(output_path, "rb") as f:
                                 st.download_button(
-                                    "⬇️ İndir",
+                                    label="⬇️ MP4 İndir",
                                     data=f,
-                                    file_name=out_path.name,
+                                    file_name=output_path.name,
                                     mime="video/mp4",
-                                    key=f"dl_{doc['id']}",
+                                    type="primary",
                                 )
                         else:
-                            st.caption(f"Dosya mevcut değil: `{out_path}`")
-                with col2:
-                    st.caption(f"ID: {doc['id']}")
-                    st.caption(f"Oluşturuldu: {doc['created_at'][:19]}")
+                            st.warning(f"Video dosyası bulunamadı: {output_path}")
+                    else:
+                        progress_area.empty()
+                        st.error("❌ Üretim hatası!")
+                        with st.expander("Hata detayları"):
+                            st.code(stderr[-3000:] if stderr else "Bilinmeyen hata")
 
-                # Script detayları
-                if doc.get("script_json"):
-                    try:
-                        script = json.loads(doc["script_json"])
-                        if st.checkbox("Senaryo göster", key=f"sc_{doc['id']}"):
-                            scenes = script.get("scenes", [])
-                            for scene in scenes:
-                                st.markdown(
-                                    f"**Sahne {scene.get('index', '?')}** ({scene.get('duration_sec', 0):.0f}s) "
-                                    f"— _{scene.get('mood', '')}_\n\n"
-                                    f"{scene.get('narration', '')}"
-                                )
-                                st.divider()
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    st.error("⏱ Zaman aşımı — işlem 30 dakikayı geçti.")
+                except Exception as exc:
+                    st.error(f"❌ Hata: {exc}")
 
+# ── SEKME 2: GEÇMİŞ ─────────────────────────────────────────────────
+with tab2:
+    st.subheader("📋 Belgesel Geçmişi")
 
-# ── İSTATİSTİKLER ─────────────────────────────────────────────────────────────
-elif page == "İstatistikler":
-    st.header("📊 İstatistikler")
+    if st.button("🔄 Yenile"):
+        st.rerun()
 
-    docs = db.list_documentaries(limit=200)
-    contents = db.get_all_contents(limit=200)
+    rows = db.list_documentaries(limit=50)
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Toplam Belgesel", len(docs))
-    col2.metric("Tamamlanan", sum(1 for d in docs if d["status"] == "done"))
-    col3.metric("Kaydedilen İçerik", len(contents))
+    if not rows:
+        st.info("📭 Henüz belgesel üretilmemiş.")
+    else:
+        status_icons = {
+            "done": "✅", "error": "❌", "pending": "⏳",
+            "scripting": "📝", "searching": "🔍", "assembling": "🎞️", "qa": "🔎",
+        }
+        for row in rows:
+            icon = status_icons.get(row["status"], "🔄")
+            with st.expander(f"{icon} [{row['id']}] {row['topic']} — {row['created_at'][:16]}"):
+                col1, col2 = st.columns(2)
+                col1.write(f"**Durum:** {row['status']}")
+                col2.write(f"**Tarih:** {row['created_at'][:16]}")
 
-    st.divider()
-    st.subheader("Belgesel Durumu Dağılımı")
+                if row.get("output_path"):
+                    output_path = Path(row["output_path"])
+                    if output_path.exists():
+                        st.video(str(output_path))
+                        with open(output_path, "rb") as f:
+                            st.download_button(
+                                label="⬇️ İndir",
+                                data=f,
+                                file_name=output_path.name,
+                                mime="video/mp4",
+                                key=f"dl_{row['id']}",
+                            )
+                    else:
+                        st.warning("Video dosyası bulunamadı.")
 
-    from collections import Counter
-    status_counts = Counter(d["status"] for d in docs)
-    if status_counts:
-        import pandas as pd
-        df_status = pd.DataFrame(
-            {"Durum": list(status_counts.keys()), "Sayı": list(status_counts.values())}
-        )
-        st.bar_chart(df_status.set_index("Durum"))
-
-    st.subheader("İçerik Platform Dağılımı")
-    stats = db.get_stats()
-    if stats["platforms"]:
-        import pandas as pd
-        df_plat = pd.DataFrame(stats["platforms"], columns=["Platform", "Sayı"])
-        st.bar_chart(df_plat.set_index("Platform"))
-
-    if stats["top_tags"]:
-        st.subheader("En Çok Kullanılan Etiketler")
-        import pandas as pd
-        df_tags = pd.DataFrame(stats["top_tags"], columns=["Etiket", "Sayı"])
-        st.dataframe(df_tags, use_container_width=True, hide_index=True)
+                if row.get("error_msg"):
+                    st.error(f"Hata: {row['error_msg'][:200]}")

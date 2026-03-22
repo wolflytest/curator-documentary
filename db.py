@@ -72,8 +72,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id     INTEGER PRIMARY KEY,
                 language    TEXT NOT NULL DEFAULT 'tr',
-                voice       TEXT NOT NULL DEFAULT 'af_heart',
-                duration    INTEGER NOT NULL DEFAULT 300,
+                voice       TEXT NOT NULL DEFAULT 'gtts_tr',
+                duration    INTEGER NOT NULL DEFAULT 600,
                 updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             )
         """)
@@ -253,7 +253,7 @@ def get_user_settings(user_id: int) -> dict:
         ).fetchone()
     if row:
         return dict(row)
-    return {"user_id": user_id, "language": "tr", "voice": "af_heart", "duration": 300}
+    return {"user_id": user_id, "language": "tr", "voice": "gtts_tr", "duration": 600}
 
 
 def save_user_settings(user_id: int, language: str, voice: str, duration: int) -> None:

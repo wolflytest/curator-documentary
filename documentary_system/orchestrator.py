@@ -274,7 +274,8 @@ def run_documentary(
             tts_result = json.loads(tts_tool._run(json.dumps({
                 "text": scene.narration,
                 "output_path": str(tts_output),
-                "voice": voice,
+                "voice": voice if language == "en" else "gtts_tr",
+                "language": language,
                 "speed": 0.95,
             })))
             if tts_result.get("success"):

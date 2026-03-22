@@ -25,6 +25,7 @@ import chat
 import db
 import pipeline as pl
 from documentary_system import orchestrator
+import config
 from config import (
     SUMMARY_HOUR,
     SUMMARY_MINUTE,
@@ -300,120 +301,171 @@ async def cmd_sil(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"❌ #{content_id} ID'li kayıt bulunamadı.")
 
 
-def _settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    """Kullanıcı ayarları inline klavyesini oluştur."""
-    # Dil satırı
-    lang_row = [
-        InlineKeyboardButton(
-            f"{'✅ ' if settings['language'] == code else ''}  {label}",
-            callback_data=f"lang:{code}",
-        )
-        for label, code in [("🇹🇷 Türkçe", "tr"), ("🇬🇧 İngilizce", "en")]
-    ]
-
-    # Ses satırları
-    voice_rows = []
-    voice_items = list(TTS_VOICES.items())
-    for i in range(0, len(voice_items), 2):
-        row = []
-        for label, code in voice_items[i:i + 2]:
-            row.append(InlineKeyboardButton(
-                f"{'✅ ' if settings['voice'] == code else ''}  {label}",
-                callback_data=f"voice:{code}",
-            ))
-        voice_rows.append(row)
-
-    # Süre satırları
-    dur_rows = []
-    dur_items = list(VIDEO_DURATIONS.items())
-    for i in range(0, len(dur_items), 2):
-        row = []
-        for label, secs in dur_items[i:i + 2]:
-            row.append(InlineKeyboardButton(
-                f"{'✅ ' if settings['duration'] == secs else ''}  {label}",
-                callback_data=f"dur:{secs}",
-            ))
-        dur_rows.append(row)
-
-    return InlineKeyboardMarkup([lang_row] + voice_rows + dur_rows)
+def _build_settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
+    """Ayarlar ana menüsü klavyesi."""
+    lang_label  = "🇹🇷 Türkçe" if settings["language"] == "tr" else "🇬🇧 İngilizce"
+    voice_label = config.TTS_VOICES.get(settings["language"], {}).get(settings["voice"], settings["voice"])
+    dur_label   = config.VIDEO_DURATIONS.get(str(settings["duration"]), f"{settings['duration']}s")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🌍 Dil: {lang_label}",   callback_data="set_lang")],
+        [InlineKeyboardButton(f"🎤 Ses: {voice_label}",  callback_data="set_voice")],
+        [InlineKeyboardButton(f"⏱ Süre: {dur_label}",   callback_data="set_duration")],
+        [InlineKeyboardButton("💾 Kaydet ve Kapat",       callback_data="settings_close")],
+    ])
 
 
 async def cmd_ayarlar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/ayarlar — belgesel üretim ayarlarını inline menüyle değiştirir."""
+    """/ayarlar — belgesel üretim ayarlarını göster ve düzenle."""
     if not _auth(update):
         return
-    uid = update.effective_user.id
-    settings = db.get_user_settings(uid)
-    voice_label = next((k for k, v in TTS_VOICES.items() if v == settings["voice"]), settings["voice"])
-    dur_label   = next((k for k, v in VIDEO_DURATIONS.items() if v == settings["duration"]), f"{settings['duration']}s")
-    lang_label  = "🇹🇷 Türkçe" if settings["language"] == "tr" else "🇬🇧 İngilizce"
+    settings = db.get_user_settings(update.effective_user.id)
     await update.message.reply_text(
-        f"⚙️ *Belgesel Ayarları*\n\n"
-        f"🌐 Dil: {lang_label}\n"
-        f"🎙 Ses: {voice_label}\n"
-        f"⏱ Süre: {dur_label}\n\n"
-        f"Aşağıdan değiştirebilirsin:",
+        "⚙️ *Belgesel Ayarları*\nAşağıdan değiştirmek istediğin ayarı seç:",
         parse_mode="Markdown",
-        reply_markup=_settings_keyboard(settings),
+        reply_markup=_build_settings_keyboard(settings),
     )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inline buton tıklamalarını işle."""
+    """Tüm inline buton callback'lerini işle."""
     query = update.callback_query
-    if not query or query.from_user.id != TELEGRAM_USER_ID:
-        return
     await query.answer()
-
-    uid = query.from_user.id
-    settings = db.get_user_settings(uid)
-    data = query.data or ""
-
-    if data.startswith("lang:"):
-        settings["language"] = data.split(":", 1)[1]
-    elif data.startswith("voice:"):
-        settings["voice"] = data.split(":", 1)[1]
-    elif data.startswith("dur:"):
-        settings["duration"] = int(data.split(":", 1)[1])
-    else:
+    if not _auth(update):
         return
 
-    db.save_user_settings(uid, settings["language"], settings["voice"], settings["duration"])
+    user_id  = update.effective_user.id
+    settings = db.get_user_settings(user_id)
+    data     = query.data or ""
 
-    voice_label = next((k for k, v in TTS_VOICES.items() if v == settings["voice"]), settings["voice"])
-    dur_label   = next((k for k, v in VIDEO_DURATIONS.items() if v == settings["duration"]), f"{settings['duration']}s")
-    lang_label  = "🇹🇷 Türkçe" if settings["language"] == "tr" else "🇬🇧 İngilizce"
-    await query.edit_message_text(
-        f"⚙️ *Belgesel Ayarları*\n\n"
-        f"🌐 Dil: {lang_label}\n"
-        f"🎙 Ses: {voice_label}\n"
-        f"⏱ Süre: {dur_label}\n\n"
-        f"Aşağıdan değiştirebilirsin:",
-        parse_mode="Markdown",
-        reply_markup=_settings_keyboard(settings),
-    )
+    # ── DİL SEÇİMİ ──────────────────────────────────────────────────
+    if data == "set_lang":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🇹🇷 Türkçe",   callback_data="lang_tr"),
+             InlineKeyboardButton("🇬🇧 İngilizce", callback_data="lang_en")],
+            [InlineKeyboardButton("◀️ Geri",        callback_data="back_settings")],
+        ])
+        await query.edit_message_text(
+            "🌍 *Dil Seçin:*", parse_mode="Markdown", reply_markup=keyboard
+        )
+
+    elif data == "lang_tr":
+        db.save_user_settings(user_id, "tr", "gtts_tr", settings["duration"])
+        settings = db.get_user_settings(user_id)
+        await query.edit_message_text(
+            "✅ Dil Türkçe olarak ayarlandı.\n\n⚙️ *Belgesel Ayarları*",
+            parse_mode="Markdown",
+            reply_markup=_build_settings_keyboard(settings),
+        )
+
+    elif data == "lang_en":
+        db.save_user_settings(user_id, "en", "bm_george", settings["duration"])
+        settings = db.get_user_settings(user_id)
+        await query.edit_message_text(
+            "✅ Dil İngilizce olarak ayarlandı.\n\n⚙️ *Belgesel Ayarları*",
+            parse_mode="Markdown",
+            reply_markup=_build_settings_keyboard(settings),
+        )
+
+    # ── SES SEÇİMİ ──────────────────────────────────────────────────
+    elif data == "set_voice":
+        lang   = settings["language"]
+        voices = config.TTS_VOICES.get(lang, {})
+        buttons = []
+        for voice_key, voice_label in voices.items():
+            tick = "✅ " if voice_key == settings["voice"] else ""
+            buttons.append([InlineKeyboardButton(
+                f"{tick}{voice_label}", callback_data=f"voice_{voice_key}"
+            )])
+        buttons.append([InlineKeyboardButton("◀️ Geri", callback_data="back_settings")])
+        await query.edit_message_text(
+            "🎤 *Ses Seçin:*\n\n"
+            "💡 Sesleri dinlemek için:\nhttps://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    elif data.startswith("voice_"):
+        voice_key = data[6:]
+        db.save_user_settings(user_id, settings["language"], voice_key, settings["duration"])
+        settings    = db.get_user_settings(user_id)
+        voice_label = config.TTS_VOICES.get(settings["language"], {}).get(voice_key, voice_key)
+        await query.edit_message_text(
+            f"✅ Ses *{voice_label}* olarak ayarlandı.\n\n⚙️ *Belgesel Ayarları*",
+            parse_mode="Markdown",
+            reply_markup=_build_settings_keyboard(settings),
+        )
+
+    # ── SÜRE SEÇİMİ ─────────────────────────────────────────────────
+    elif data == "set_duration":
+        buttons = []
+        for dur_val, dur_label in config.VIDEO_DURATIONS.items():
+            tick = "✅ " if int(dur_val) == settings["duration"] else ""
+            buttons.append([InlineKeyboardButton(
+                f"{tick}{dur_label}", callback_data=f"dur_{dur_val}"
+            )])
+        buttons.append([InlineKeyboardButton("◀️ Geri", callback_data="back_settings")])
+        await query.edit_message_text(
+            "⏱ *Video Süresi Seçin:*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    elif data.startswith("dur_"):
+        dur_val = int(data[4:])
+        db.save_user_settings(user_id, settings["language"], settings["voice"], dur_val)
+        settings = db.get_user_settings(user_id)
+        await query.edit_message_text(
+            f"✅ Süre *{config.VIDEO_DURATIONS[str(dur_val)]}* olarak ayarlandı.\n\n⚙️ *Belgesel Ayarları*",
+            parse_mode="Markdown",
+            reply_markup=_build_settings_keyboard(settings),
+        )
+
+    # ── GERİ / KAPAT ────────────────────────────────────────────────
+    elif data == "back_settings":
+        await query.edit_message_text(
+            "⚙️ *Belgesel Ayarları*\nAşağıdan değiştirmek istediğin ayarı seç:",
+            parse_mode="Markdown",
+            reply_markup=_build_settings_keyboard(settings),
+        )
+
+    elif data == "settings_close":
+        lang  = "🇹🇷 Türkçe" if settings["language"] == "tr" else "🇬🇧 İngilizce"
+        voice = config.TTS_VOICES.get(settings["language"], {}).get(settings["voice"], settings["voice"])
+        dur   = config.VIDEO_DURATIONS.get(str(settings["duration"]), f"{settings['duration']}s")
+        await query.edit_message_text(
+            f"✅ *Ayarlar kaydedildi!*\n\n"
+            f"🌍 Dil: {lang}\n"
+            f"🎤 Ses: {voice}\n"
+            f"⏱ Süre: {dur}\n\n"
+            f"Belgesel üretmek için:\n`/belgesel <konu>`",
+            parse_mode="Markdown",
+        )
 
 
 async def cmd_belgesel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/belgesel <konu> — belgesel üretim pipeline'ını başlatır."""
+    """/belgesel <konu> — kullanıcı ayarlarına göre belgesel üretir."""
     if not _auth(update):
         return
     topic = " ".join(context.args) if context.args else ""
     if not topic:
         await update.message.reply_text(
-            "❓ Kullanım: `/belgesel Osmanlı'nın Yükselişi`",
+            "❓ Kullanım: `/belgesel Osmanlı'nın Yükselişi`\n\n"
+            "⚙️ Ayarlar için: /ayarlar",
             parse_mode="Markdown",
         )
         return
 
-    uid = update.effective_user.id
-    settings = db.get_user_settings(uid)
-    voice_label = next((k for k, v in TTS_VOICES.items() if v == settings["voice"]), settings["voice"])
-    dur_label   = next((k for k, v in VIDEO_DURATIONS.items() if v == settings["duration"]), f"{settings['duration']}s")
+    settings    = db.get_user_settings(update.effective_user.id)
+    lang_emoji  = "🇹🇷" if settings["language"] == "tr" else "🇬🇧"
+    voice_label = config.TTS_VOICES.get(settings["language"], {}).get(settings["voice"], settings["voice"])
+    dur_label   = config.VIDEO_DURATIONS.get(str(settings["duration"]), f"{settings['duration']}s")
 
     msg = await update.message.reply_text(
-        f"🎬 Belgesel başlatılıyor: *{topic}*\n"
-        f"🎙 Ses: {voice_label} | ⏱ Süre: {dur_label}\n"
+        f"🎬 *Belgesel başlatılıyor...*\n\n"
+        f"📌 Konu: *{topic}*\n"
+        f"{lang_emoji} Dil: {settings['language'].upper()}\n"
+        f"🎤 Ses: {voice_label}\n"
+        f"⏱ Süre: {dur_label}\n\n"
         f"⏳ Bu işlem birkaç dakika sürebilir...",
         parse_mode="Markdown",
     )
@@ -421,14 +473,15 @@ async def cmd_belgesel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
-            orchestrator.run_documentary,
-            topic,
-            settings["duration"],
-            settings["language"],
-            settings["voice"],
+            lambda: orchestrator.run_documentary(
+                topic=topic,
+                target_duration=settings["duration"],
+                language=settings["language"],
+                voice=settings["voice"],
+            ),
         )
         await msg.edit_text(
-            f"✅ *{result['title']}*\n"
+            f"✅ *{result['title']}*\n\n"
             f"🎬 {result['scene_count']} sahne\n"
             f"⭐ QA skoru: {result['qa_score']:.1f}/10\n"
             f"💾 `{result['output_path']}`",

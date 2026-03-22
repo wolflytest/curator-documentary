@@ -42,18 +42,28 @@ CHAT_CONTEXT_LIMIT = 50
 OPENCLAW_DIR = Path(__file__).parent / "openclaw_knowledge"
 OPENCLAW_DIR.mkdir(exist_ok=True)
 
-# Belgesel TTS sesleri: kullanıcıya gösterilen ad → kokoro ses kodu
-TTS_VOICES: dict[str, str] = {
-    "Kadın (Doğal)":   "af_heart",
-    "Kadın (Hızlı)":   "af_sky",
-    "Erkek (Derin)":   "bm_lewis",
-    "Erkek (Klasik)":  "bm_george",
+# TTS ses seçenekleri: dil → {ses_kodu: etiket}
+TTS_VOICES: dict[str, dict[str, str]] = {
+    "en": {
+        "bm_george":  "🎙 George (İngiliz Erkek) - Belgesel",
+        "bm_daniel":  "🎙 Daniel (İngiliz Erkek) - Haber",
+        "bm_lewis":   "🎙 Lewis (İngiliz Erkek) - Dramatik",
+        "am_michael": "🎙 Michael (ABD Erkek) - Nötr",
+        "am_liam":    "🎙 Liam (ABD Erkek) - Genç",
+        "bf_emma":    "🎙 Emma (İngiliz Kadın) - Zarif",
+        "af_bella":   "🎙 Bella (ABD Kadın) - Sıcak",
+        "af_nova":    "🎙 Nova (ABD Kadın) - Enerjik",
+    },
+    "tr": {
+        "gtts_tr": "🎙 Türkçe (gTTS)",
+    },
 }
 
-# Belgesel hedef süreleri: kullanıcıya gösterilen ad → saniye
-VIDEO_DURATIONS: dict[str, int] = {
-    "Kısa (2 dk)":    120,
-    "Orta (5 dk)":    300,
-    "Uzun (10 dk)":   600,
-    "Epik (20 dk)":   1200,
+# Belgesel hedef süreleri: str_saniye → etiket
+VIDEO_DURATIONS: dict[str, str] = {
+    "30":  "30 saniye (Test)",
+    "120": "2 dakika (Kısa)",
+    "300": "5 dakika (Orta)",
+    "600": "10 dakika (Standart)",
+    "900": "15 dakika (Uzun)",
 }
