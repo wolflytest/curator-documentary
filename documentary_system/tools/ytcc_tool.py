@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 _TMP_DIR = Path("/tmp/curator_docs/ytcc")
 _TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-COOKIE_FILE = Path("/home/ubuntu/curator-documentary/youtube_cookies.txt")
+COOKIE_FILE = Path(__file__).parent.parent.parent / "youtube_cookies.txt"
 
 
 class YouTubeCCTool(BaseTool):
