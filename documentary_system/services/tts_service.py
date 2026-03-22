@@ -5,6 +5,11 @@ TTS Servisi — MoneyPrinterTurbo-Extended tarzı.
 Türkçe:    KokoroTTS (ONNX) → başarısız → gTTS
            faster-whisper ile kelime zaman damgaları hizalama
 
+Ek TTS seçenekleri (MPT-Extended'dan):
+  chatterbox:default  — Chatterbox TTS (ses klonlama, whisperx hizalama)
+  chatterbox:clone:<name> — Referans ses dosyasıyla ses klonlama
+  siliconflow:FunAudioLLM/CosyVoice2-0.5B:<voice> — SiliconFlow CosyVoice2 TTS
+
 Word timestamps formatı:
     [{"word": "Ottoman", "start": 0.12, "end": 0.54}, ...]
 """
@@ -12,11 +17,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# ── Chatterbox TTS (MPT-Extended) ─────────────────────────────────────────────
+try:
+    from chatterbox.tts import ChatterboxTTS
+    import whisperx
+    import torch
+    import torchaudio
+    CHATTERBOX_AVAILABLE = True
+    log.info("Chatterbox TTS ve WhisperX mevcut")
+except ImportError as _e:
+    CHATTERBOX_AVAILABLE = False
+    log.debug("Chatterbox TTS veya WhisperX mevcut değil: %s", _e)
+
+_chatterbox_model = None
+_whisperx_model   = None
 
 
 @dataclass
@@ -165,6 +187,242 @@ def _probe_duration(path: Path) -> float:
         return 0.0
 
 
+# ── Siliconflow TTS (MPT-Extended) ────────────────────────────────────────────
+
+def _siliconflow_tts(text: str, voice: str, output_path: Path) -> TTSResult:
+    """
+    SiliconFlow CosyVoice2 TTS API.
+    voice formatı: "siliconflow:FunAudioLLM/CosyVoice2-0.5B:alex-Male"
+    SILICONFLOW_API_KEY env değişkeni gereklidir.
+    """
+    api_key = os.getenv("SILICONFLOW_API_KEY", "")
+    if not api_key:
+        return TTSResult(success=False, error="SILICONFLOW_API_KEY ayarlanmamış")
+
+    parts = voice.split(":")
+    if len(parts) < 3:
+        return TTSResult(success=False, error=f"Geçersiz siliconflow ses formatı: {voice}")
+
+    model     = parts[1]
+    voice_str = parts[2].split("-")[0]  # "alex-Male" → "alex"
+    full_voice = f"{model}:{voice_str}"
+
+    try:
+        import requests as _req
+        payload = {
+            "model":           model,
+            "input":           text.strip(),
+            "voice":           full_voice,
+            "response_format": "mp3",
+            "sample_rate":     32000,
+            "stream":          False,
+            "speed":           1.0,
+            "gain":            0,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        for attempt in range(3):
+            try:
+                resp = _req.post(
+                    "https://api.siliconflow.cn/v1/audio/speech",
+                    json=payload, headers=headers, timeout=60,
+                )
+                if resp.status_code == 200:
+                    output_path.write_bytes(resp.content)
+                    duration = _probe_duration(output_path)
+                    log.info("SiliconFlow TTS tamamlandı: %s (%.1fs)", output_path.name, duration)
+                    return TTSResult(success=True, audio_path=str(output_path), duration_sec=duration)
+                log.warning("SiliconFlow %d: %s", resp.status_code, resp.text[:200])
+            except Exception as exc:
+                log.warning("SiliconFlow deneme %d hatası: %s", attempt + 1, exc)
+
+        return TTSResult(success=False, error="SiliconFlow 3 denemede başarısız")
+    except Exception as exc:
+        return TTSResult(success=False, error=str(exc))
+
+
+# ── Chatterbox TTS (MPT-Extended) ─────────────────────────────────────────────
+
+def _preprocess_text_chatterbox(text: str) -> str:
+    """Chatterbox TTS için metin ön işleme (MPT-Extended'dan)."""
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'!!+', '!', text)
+    text = re.sub(r'\?\?+', '?', text)
+    text = re.sub(r'\.\.+', '.', text)
+    contractions = {
+        r"\byou're\b": 'you are', r"\bdon't\b": 'do not',
+        r"\blet's\b": 'let us',  r"\bthat's\b": 'that is',
+        r"\bit's\b":  'it is',
+    }
+    for pat, rep in contractions.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _chunk_text_chatterbox(text: str, max_size: int = 300) -> list[str]:
+    """Uzun metni Chatterbox için parçalara böl (MPT-Extended'dan)."""
+    if len(text) <= max_size:
+        return [text]
+    chunks: list[str] = []
+    sentences = re.split(r'([.!?])', text)
+    current = ""
+    for i in range(0, len(sentences), 2):
+        sent = sentences[i].strip()
+        punc = sentences[i + 1] if i + 1 < len(sentences) else ""
+        full = sent + punc
+        if len(current) + len(full) > max_size and current:
+            chunks.append(current.strip())
+            current = full
+        else:
+            current = (current + " " + full).strip() if current else full
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks or [text]
+
+
+def _chatterbox_single(text: str, voice: str, output_path: Path) -> TTSResult:
+    """Tek parça metin için Chatterbox TTS + WhisperX hizalaması (MPT-Extended'dan)."""
+    global _chatterbox_model, _whisperx_model
+
+    device = os.getenv("CHATTERBOX_DEVICE", "cpu").lower()
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+
+    # voice: "chatterbox:clone:<name>" veya "chatterbox:default:..."
+    parts = voice.split(":")
+    voice_type      = parts[1] if len(parts) > 1 else "default"
+    voice_base_name = parts[2].split("-")[0] if len(parts) > 2 else ""
+
+    # Referans ses dosyası (klonlama için)
+    audio_prompt = None
+    if voice_type == "clone" and voice_base_name not in ("", "Voice Clone"):
+        ref_dir = Path(__file__).parents[2] / "reference_audio"
+        for ext in (".wav", ".mp3", ".flac", ".m4a"):
+            candidate = ref_dir / (voice_base_name + ext)
+            if candidate.exists():
+                audio_prompt = str(candidate)
+                break
+
+    # Model yükleme
+    if _chatterbox_model is None:
+        try:
+            _chatterbox_model = ChatterboxTTS.from_pretrained(device=device)
+        except Exception:
+            device = "cpu"
+            _chatterbox_model = ChatterboxTTS.from_pretrained(device=device)
+
+    cfg_weight = float(os.getenv("CHATTERBOX_CFG_WEIGHT", "0.2"))
+    wav = (_chatterbox_model.generate(text, audio_prompt_path=audio_prompt, cfg_weight=cfg_weight)
+           if audio_prompt
+           else _chatterbox_model.generate(text, cfg_weight=cfg_weight))
+
+    # WAV → MP3
+    tmp_wav = output_path.with_suffix(".chatterbox_tmp.wav")
+    torchaudio.save(str(tmp_wav), wav, 24000)
+
+    try:
+        from moviepy import AudioFileClip as _AC
+        _ac = _AC(str(tmp_wav))
+        _ac.write_audiofile(str(output_path), logger=None)
+        _ac.close()
+        tmp_wav.unlink(missing_ok=True)
+    except Exception:
+        tmp_wav.rename(output_path)
+
+    # WhisperX kelime hizalaması
+    word_timestamps: list[dict] = []
+    try:
+        if _whisperx_model is None:
+            compute_type = "int8" if device == "cpu" else "float16"
+            _whisperx_model = whisperx.load_model("base", device, compute_type=compute_type)
+
+        audio_arr = whisperx.load_audio(str(output_path))
+        result    = _whisperx_model.transcribe(audio_arr, batch_size=16)
+
+        if result and result.get("segments"):
+            model_a, meta = whisperx.load_align_model(
+                language_code=result["language"], device=device
+            )
+            result = whisperx.align(
+                result["segments"], model_a, meta, audio_arr, device,
+                return_char_alignments=False,
+            )
+            for seg in result.get("segments", []):
+                for w in seg.get("words", []):
+                    word  = w.get("word", "").strip()
+                    start = w.get("start")
+                    end   = w.get("end")
+                    if word and start is not None and end is not None:
+                        word_timestamps.append({
+                            "word":  word,
+                            "start": round(float(start), 3),
+                            "end":   round(float(end), 3),
+                        })
+    except Exception as exc:
+        log.warning("WhisperX hizalaması başarısız: %s", exc)
+
+    duration = _probe_duration(output_path)
+    log.info("Chatterbox TTS tamamlandı: %d kelime, %.1fs", len(word_timestamps), duration)
+    return TTSResult(
+        success=True,
+        audio_path=str(output_path),
+        duration_sec=duration,
+        word_timestamps=word_timestamps,
+    )
+
+
+def _chatterbox_tts(text: str, voice: str, output_path: Path) -> TTSResult:
+    """Chatterbox TTS — gerekirse metni parçalara böler (MPT-Extended'dan)."""
+    if not CHATTERBOX_AVAILABLE:
+        return TTSResult(success=False, error="chatterbox-tts veya whisperx kurulu değil")
+
+    text = _preprocess_text_chatterbox(text.strip())
+    threshold = int(os.getenv("CHATTERBOX_CHUNK_THRESHOLD", "600"))
+
+    if len(text) <= threshold:
+        return _chatterbox_single(text, voice, output_path)
+
+    # Uzun metin → parçalara böl ve birleştir
+    chunks = _chunk_text_for_chatterbox(text, max_size=300)
+    tmp_paths: list[Path] = []
+    all_words: list[dict] = []
+    cum_dur = 0.0
+
+    try:
+        for i, chunk in enumerate(chunks):
+            chunk_path = output_path.with_suffix(f".chunk{i}.mp3")
+            chunk_result = _chatterbox_single(chunk, voice, chunk_path)
+            if not chunk_result.success:
+                return TTSResult(success=False, error=f"Parça {i} başarısız")
+            tmp_paths.append(chunk_path)
+            for w in chunk_result.word_timestamps:
+                all_words.append({
+                    "word":  w["word"],
+                    "start": round(w["start"] + cum_dur, 3),
+                    "end":   round(w["end"]   + cum_dur, 3),
+                })
+            cum_dur += chunk_result.duration_sec
+
+        # MoviePy ile ses parçalarını birleştir
+        from moviepy import AudioFileClip as _AC, concatenate_audioclips as _cat
+        clips = [_AC(str(p)) for p in tmp_paths]
+        combined = _cat(clips)
+        combined.write_audiofile(str(output_path), logger=None)
+        for c in clips:
+            c.close()
+    finally:
+        for p in tmp_paths:
+            p.unlink(missing_ok=True)
+
+    duration = _probe_duration(output_path)
+    return TTSResult(
+        success=True,
+        audio_path=str(output_path),
+        duration_sec=duration,
+        word_timestamps=all_words,
+    )
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def synthesize(
@@ -190,7 +448,22 @@ def synthesize(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if language == "en":
+    # ── MPT-Extended TTS seçenekleri ──
+    if voice.startswith("chatterbox:"):
+        result = _chatterbox_tts(text, voice, output_path)
+        if not result.success:
+            log.warning("Chatterbox başarısız, edge_tts'e geçiliyor: %s", result.error)
+            result = _run_edge_tts(text, "en-US-GuyNeural", output_path)
+        # Chatterbox zaten WhisperX ile hizalıyor; tekrar hizalamaya gerek yok
+        return result
+
+    if voice.startswith("siliconflow:"):
+        result = _siliconflow_tts(text, voice, output_path)
+        if not result.success:
+            log.warning("SiliconFlow başarısız, edge_tts'e geçiliyor: %s", result.error)
+            result = _run_edge_tts(text, "en-US-GuyNeural", output_path)
+
+    elif language == "en":
         result = _run_edge_tts(text, voice, output_path)
         if not result.success:
             log.warning("edge_tts başarısız, Kokoro'ya geçiliyor: %s", result.error)

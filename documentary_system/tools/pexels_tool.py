@@ -62,14 +62,19 @@ class PexelsTool(BaseTool):
                 chosen = hd_files[0] if hd_files else (video_files[0] if video_files else None)
                 if not chosen:
                     continue
+                # MPT-Extended: thumbnail + preview_images (benzerlik skorlaması için)
+                thumbnail_url  = item.get("image", "")
+                preview_images = [p["picture"] for p in item.get("video_pictures", [])]
                 results.append({
-                    "title": item.get("url", ""),
-                    "url": item.get("url", ""),
-                    "download_url": chosen.get("link", ""),
-                    "type": "video",
-                    "width": chosen.get("width", 0),
-                    "height": chosen.get("height", 0),
-                    "duration": item.get("duration", 0),
+                    "title":          item.get("url", ""),
+                    "url":            item.get("url", ""),
+                    "download_url":   chosen.get("link", ""),
+                    "type":           "video",
+                    "width":          chosen.get("width", 0),
+                    "height":         chosen.get("height", 0),
+                    "duration":       item.get("duration", 0),
+                    "thumbnail_url":  thumbnail_url,
+                    "preview_images": preview_images,
                 })
         else:
             for item in result.get("photos", []):

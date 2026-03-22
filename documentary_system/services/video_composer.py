@@ -31,6 +31,21 @@ _VIDEO_BITRATE = "8000k"
 _VIDEO_FPS     = 30
 _VIDEO_PRESET  = "medium"
 
+# ── VideoAspect (MPT-Extended schema.py'den) ──────────────────────────────────
+class VideoAspect:
+    """16:9 (yatay), 9:16 (dikey/portrait), 1:1 (kare)."""
+    LANDSCAPE = "16:9"   # 1920x1080
+    PORTRAIT  = "9:16"   # 1080x1920
+    SQUARE    = "1:1"    # 1080x1080
+
+    @staticmethod
+    def to_resolution(aspect: str) -> tuple[int, int]:
+        if aspect == "9:16":
+            return 1080, 1920
+        elif aspect == "1:1":
+            return 1080, 1080
+        return 1920, 1080  # 16:9 default
+
 
 def _apply_transition(clip, transition: str, duration: float = _TRANSITION_DURATION):
     """
@@ -68,15 +83,32 @@ def compose_scene(
     output_path: Path,
     duration: float,
     transition: str = "cut",
+    aspect: str = "16:9",
 ) -> Path | None:
     """
     Video klibine ses ekle, süreyi kırp, MPT-Extended geçişlerini uygula.
     Video kalitesi: CRF 18, 8000k bitrate, 30fps (MPT-Extended standardı)
+    aspect: "16:9" | "9:16" | "1:1"
     """
     try:
-        from moviepy import VideoFileClip, AudioFileClip
+        from moviepy import VideoFileClip, AudioFileClip, ColorClip, CompositeVideoClip
 
         video = VideoFileClip(str(video_path)).subclipped(0, duration)
+
+        # Aspect ratio yeniden boyutlandırma (MPT-Extended'dan)
+        target_w, target_h = VideoAspect.to_resolution(aspect)
+        vw, vh = video.size
+        if (vw, vh) != (target_w, target_h):
+            clip_ratio   = vw / vh
+            target_ratio = target_w / target_h
+            if abs(clip_ratio - target_ratio) > 0.01:
+                scale = target_w / vw if clip_ratio > target_ratio else target_h / vh
+                nw, nh = int(vw * scale), int(vh * scale)
+                bg    = ColorClip(size=(target_w, target_h), color=(0, 0, 0)).with_duration(duration)
+                video = CompositeVideoClip([bg, video.resized((nw, nh)).with_position("center")])
+            else:
+                video = video.resized((target_w, target_h))
+
         audio = AudioFileClip(str(audio_path))
         video = video.with_audio(audio.subclipped(0, min(audio.duration, duration)))
 
@@ -89,10 +121,12 @@ def compose_scene(
             audio_codec="aac",
             fps=_VIDEO_FPS,
             preset=_VIDEO_PRESET,
-            ffmpeg_params=["-pix_fmt", "yuv420p", "-crf", _VIDEO_CRF, "-b:v", _VIDEO_BITRATE],
+            ffmpeg_params=["-pix_fmt", "yuv420p", "-crf", _VIDEO_CRF, "-b:v", _VIDEO_BITRATE,
+                           "-movflags", "+faststart"],
             logger=None,
         )
-        log.info("compose_scene tamamlandı: %s (%.1fs, geçiş=%s)", output_path.name, duration, transition)
+        log.info("compose_scene tamamlandı: %s (%.1fs, geçiş=%s, aspect=%s)",
+                 output_path.name, duration, transition, aspect)
         return output_path
 
     except Exception as exc:

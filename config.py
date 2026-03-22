@@ -13,6 +13,8 @@ TELEGRAM_USER_ID: int = int(os.environ["TELEGRAM_USER_ID"])
 GROQ_API_KEY: str = os.environ["GROQ_API_KEY"]
 GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
 PEXELS_API_KEY: str = os.environ["PEXELS_API_KEY"]
+PIXABAY_API_KEY: str = os.getenv("PIXABAY_API_KEY", "")
+SILICONFLOW_API_KEY: str = os.getenv("SILICONFLOW_API_KEY", "")
 
 # Geçici dosyalar için dizin (700: sadece bot process erişebilir)
 TMP_DIR = Path("/tmp/curator")
@@ -45,6 +47,7 @@ OPENCLAW_DIR.mkdir(exist_ok=True)
 # TTS ses seçenekleri: dil → {ses_kodu: etiket}
 TTS_VOICES: dict[str, dict[str, str]] = {
     "en": {
+        # Kokoro edge_tts sesleri
         "bm_george":  "🎙 George (İngiliz Erkek) - Belgesel",
         "bm_daniel":  "🎙 Daniel (İngiliz Erkek) - Haber",
         "bm_lewis":   "🎙 Lewis (İngiliz Erkek) - Dramatik",
@@ -53,10 +56,25 @@ TTS_VOICES: dict[str, dict[str, str]] = {
         "bf_emma":    "🎙 Emma (İngiliz Kadın) - Zarif",
         "af_bella":   "🎙 Bella (ABD Kadın) - Sıcak",
         "af_nova":    "🎙 Nova (ABD Kadın) - Enerjik",
+        # Chatterbox TTS (ses klonlama) — chatterbox-tts kurulu olmalı
+        "chatterbox:default:Default Voice-Neutral": "🔬 Chatterbox (Varsayılan)",
+        "chatterbox:clone:Voice Clone-Custom":      "🔬 Chatterbox (Ses Klonlama)",
+        # SiliconFlow CosyVoice2 — SILICONFLOW_API_KEY gerekli
+        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:alex-Male":    "☁️ SiliconFlow Alex (Erkek)",
+        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:anna-Female":   "☁️ SiliconFlow Anna (Kadın)",
+        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:bella-Female":  "☁️ SiliconFlow Bella (Kadın)",
+        "siliconflow:FunAudioLLM/CosyVoice2-0.5B:david-Male":    "☁️ SiliconFlow David (Erkek)",
     },
     "tr": {
         "gtts_tr": "🎙 Türkçe (gTTS)",
     },
+}
+
+# Aspect ratio seçenekleri (MPT-Extended VideoAspect)
+VIDEO_ASPECTS: dict[str, str] = {
+    "16:9": "🖥️ Yatay (16:9) — 1920×1080",
+    "9:16": "📱 Dikey (9:16) — 1080×1920",
+    "1:1":  "⬛ Kare (1:1) — 1080×1080",
 }
 
 # Belgesel hedef süreleri: str_saniye → etiket

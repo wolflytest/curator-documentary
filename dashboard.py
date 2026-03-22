@@ -69,6 +69,15 @@ with st.sidebar:
         format_func=lambda x: duration_options[x],
     )
 
+    # Aspect ratio (MPT-Extended VideoAspect)
+    aspect_options = config.VIDEO_ASPECTS
+    aspect_ratio = st.selectbox(
+        "📐 Video Formatı",
+        options=list(aspect_options.keys()),
+        format_func=lambda x: aspect_options[x],
+        index=0,
+    )
+
     st.divider()
     st.write("🎬 Geçiş & Efektler")
 
@@ -128,6 +137,7 @@ with tab1:
 
     st.info(
         f"{lang_emoji} **{language.upper()}** · 🎤 {voice_label} · ⏱ {dur_label} · "
+        f"📐 {aspect_ratio} · "
         f"🎞️ {transition_options[transition_mode].split(' ')[1]} · 🎵 {int(bgm_volume*100)}%",
         icon="ℹ️",
     )
@@ -161,6 +171,7 @@ result = run_documentary(
     transition_mode={repr(transition_mode)},
     subtitle_color={repr(subtitle_color)},
     bgm_volume={bgm_volume},
+    video_aspect={repr(aspect_ratio)},
 )
 print(json.dumps(result, ensure_ascii=False))
 """,

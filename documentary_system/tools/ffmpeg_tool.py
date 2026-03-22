@@ -64,11 +64,13 @@ class FFmpegTool(BaseTool):
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        video_aspect = data.get("video_aspect", "16:9")
+
         try:
             if proc_type == "ken_burns":
-                self._ken_burns(input_path, output_path, duration, zoom_direction)
+                self._ken_burns(input_path, output_path, duration, zoom_direction, video_aspect)
             elif proc_type == "clip":
-                self._clip(input_path, output_path, duration, data)
+                self._clip(input_path, output_path, duration, data, video_aspect)
             elif proc_type == "subtitle":
                 self._subtitle(input_path, output_path, subtitle_text)
             elif proc_type == "burn_srt":
@@ -93,16 +95,27 @@ class FFmpegTool(BaseTool):
             log.error("FFmpegTool işlem hatası: %s", exc)
             return json.dumps({"success": False, "output_path": "", "duration": 0.0})
 
+    @staticmethod
+    def _aspect_to_res(aspect: str) -> tuple[int, int]:
+        """Aspect ratio string → (width, height)."""
+        if aspect == "9:16":
+            return 1080, 1920
+        elif aspect == "1:1":
+            return 1080, 1080
+        return 1920, 1080  # 16:9 default
+
     def _ken_burns(
         self,
         input_path: Path,
         output_path: Path,
         duration: float,
         zoom_direction: str,
+        video_aspect: str = "16:9",
     ) -> None:
         """Fotoğrafa düzgün Ken Burns efekti uygula (titreme önlendi)."""
         fps = 25
         nb_frames = int(duration * fps)
+        w, h = self._aspect_to_res(video_aspect)
 
         if zoom_direction == "in":
             zoom_expr = "zoom+0.0005"
@@ -116,8 +129,8 @@ class FFmpegTool(BaseTool):
         vf = (
             f"scale=8000:-1,"
             f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}'"
-            f":d={nb_frames}:s=1920x1080:fps={fps},"
-            f"scale=1920:1080"
+            f":d={nb_frames}:s={w}x{h}:fps={fps},"
+            f"scale={w}:{h}"
         )
 
         subprocess.run(
@@ -143,9 +156,11 @@ class FFmpegTool(BaseTool):
         output_path: Path,
         duration: float,
         data: dict,
+        video_aspect: str = "16:9",
     ) -> None:
         """Video klibini kes ve yeniden boyutlandır."""
         start = float(data.get("clip_start", 0))
+        w, h  = self._aspect_to_res(video_aspect)
         subprocess.run(
             [
                 "ffmpeg", "-y",
@@ -153,8 +168,8 @@ class FFmpegTool(BaseTool):
                 "-i", str(input_path),
                 "-t", str(duration),
                 "-vf", (
-                    "scale=1920:1080:force_original_aspect_ratio=decrease,"
-                    "pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+                    f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                    f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"
                 ),
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",

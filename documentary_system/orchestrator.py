@@ -130,6 +130,7 @@ def run_documentary(
     transition_mode: str = "shuffle",
     subtitle_color: str = "#ffdc00",
     bgm_volume: float = 0.20,
+    video_aspect: str = "16:9",
 ) -> dict:
     """
     Tam belgesel üretim pipeline'ı.
@@ -138,10 +139,12 @@ def run_documentary(
         topic:           Belgesel konusu
         target_duration: Hedef süre (saniye)
         language:        'tr' | 'en'
-        voice:           edge_tts ses kodu (en için) veya 'gtts_tr' (tr için)
+        voice:           TTS ses kodu — edge_tts / gtts_tr /
+                         chatterbox:default / siliconflow:model:voice
         transition_mode: cut | fade | shuffle | slidein_left | slidein_right | ...
         subtitle_color:  Aktif kelime rengi hex (örn. '#ffdc00')
         bgm_volume:      Arka plan müziği ses seviyesi (0.0–1.0, MPT default 0.20)
+        video_aspect:    '16:9' | '9:16' | '1:1' (MPT-Extended VideoAspect)
     """
     work_dir = Path(f"/tmp/curator_docs/{int(time.time())}")
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -246,6 +249,7 @@ def run_documentary(
                     "duration":       scene.duration_sec,
                     "clip_start":     media.get("clip_start", 0.0),
                     "zoom_direction": "in" if scene.index % 2 == 0 else "out",
+                    "video_aspect":   video_aspect,
                 })))
 
                 if clip_result.get("success"):
@@ -276,6 +280,7 @@ def run_documentary(
                             output_path=clip_final,
                             duration=audio_dur,
                             transition=effective_transition,
+                            aspect=video_aspect,
                         )
                         scene.final_clip_path = str(composed) if composed else str(current_clip)
                     else:
@@ -315,6 +320,7 @@ def run_documentary(
                             output_path=clip_final,
                             duration=audio_dur,
                             transition=effective_transition,
+                            aspect=video_aspect,
                         )
                         scene.final_clip_path = str(composed) if composed else str(current_clip)
                     else:
