@@ -254,10 +254,11 @@ def run_documentary(
                     # Altyazı yak (SRT → burn_srt)
                     if srt_path.exists() and srt_path.stat().st_size > 10:
                         sub_result = json.loads(ffmpeg_tool._run(json.dumps({
-                            "input_path":  str(current_clip),
-                            "output_path": str(clip_sub),
-                            "type":        "burn_srt",
-                            "srt_path":    str(srt_path),
+                            "input_path":     str(current_clip),
+                            "output_path":    str(clip_sub),
+                            "type":           "burn_srt",
+                            "srt_path":       str(srt_path),
+                            "subtitle_color": subtitle_color,
                         })))
                         current_clip = (
                             Path(sub_result["output_path"])
@@ -296,10 +297,11 @@ def run_documentary(
                     current_clip = clip_raw
                     if srt_path.exists() and srt_path.stat().st_size > 10:
                         sub_result = json.loads(ffmpeg_tool._run(json.dumps({
-                            "input_path":  str(clip_raw),
-                            "output_path": str(clip_sub),
-                            "type":        "burn_srt",
-                            "srt_path":    str(srt_path),
+                            "input_path":     str(clip_raw),
+                            "output_path":    str(clip_sub),
+                            "type":           "burn_srt",
+                            "srt_path":       str(srt_path),
+                            "subtitle_color": subtitle_color,
                         })))
                         current_clip = (
                             Path(sub_result["output_path"])

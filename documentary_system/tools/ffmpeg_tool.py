@@ -73,7 +73,8 @@ class FFmpegTool(BaseTool):
                 self._subtitle(input_path, output_path, subtitle_text)
             elif proc_type == "burn_srt":
                 srt_path = Path(data.get("srt_path", ""))
-                self._burn_srt(input_path, output_path, srt_path)
+                subtitle_color = data.get("subtitle_color", "#ffdc00")
+                self._burn_srt(input_path, output_path, srt_path, subtitle_color)
             else:
                 raise ValueError(f"Bilinmeyen işlem tipi: {proc_type}")
 
@@ -195,22 +196,33 @@ class FFmpegTool(BaseTool):
         )
 
 
+    @staticmethod
+    def _hex_to_ass(hex_color: str) -> str:
+        """#RRGGBB hex rengini ASS &HBBGGRR formatına çevir."""
+        h = hex_color.lstrip("#")
+        if len(h) != 6:
+            return "&H00FFDC00"  # varsayılan sarı
+        r, g, b = h[0:2], h[2:4], h[4:6]
+        return f"&H00{b}{g}{r}".upper()
+
     def _burn_srt(
         self,
         input_path: Path,
         output_path: Path,
         srt_path: Path,
+        subtitle_color: str = "#ffdc00",
     ) -> None:
         """SRT altyazısını video üzerine yak (libass gerektirir)."""
         if not srt_path.exists():
             raise FileNotFoundError(f"SRT dosyası bulunamadı: {srt_path}")
 
+        ass_color = self._hex_to_ass(subtitle_color)
         # ffmpeg subtitles filtresi için path'i escape et
         escaped = str(srt_path).replace("\\", "/").replace(":", "\\\\:")
         style = (
-            "FontSize=22,Alignment=2,"
-            "PrimaryColour=&HFFFFFF,BackColour=&H80000000,"
-            "BorderStyle=3,Outline=1,Shadow=0,MarginV=20"
+            f"FontSize=22,Alignment=2,"
+            f"PrimaryColour={ass_color},BackColour=&H80000000,"
+            f"BorderStyle=3,Outline=1,Shadow=0,MarginV=20"
         )
 
         subprocess.run(
