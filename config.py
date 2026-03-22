@@ -41,3 +41,19 @@ CHAT_CONTEXT_LIMIT = 50
 # OpenClaw bilgi tabanı dizini
 OPENCLAW_DIR = Path(__file__).parent / "openclaw_knowledge"
 OPENCLAW_DIR.mkdir(exist_ok=True)
+
+# Belgesel TTS sesleri: kullanıcıya gösterilen ad → kokoro ses kodu
+TTS_VOICES: dict[str, str] = {
+    "Kadın (Doğal)":   "af_heart",
+    "Kadın (Hızlı)":   "af_sky",
+    "Erkek (Derin)":   "bm_lewis",
+    "Erkek (Klasik)":  "bm_george",
+}
+
+# Belgesel hedef süreleri: kullanıcıya gösterilen ad → saniye
+VIDEO_DURATIONS: dict[str, int] = {
+    "Kısa (2 dk)":    120,
+    "Orta (5 dk)":    300,
+    "Uzun (10 dk)":   600,
+    "Epik (20 dk)":   1200,
+}

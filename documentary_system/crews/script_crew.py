@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 def create_script_crew(
     topic: str,
     target_duration: int = 600,
+    language: str = "tr",
 ) -> tuple[Crew, Task]:
     """
     Senaryo üretim ekibini oluştur.
@@ -21,13 +22,14 @@ def create_script_crew(
     """
     llm = get_llm()
     scene_count = max(5, target_duration // 7)
+    lang_label = "Türkçe" if language == "tr" else "English"
 
     # AGENT 1: Senarist
     creator = Agent(
         role="Tarihi Belgesel Senarist",
         goal=(
             f"'{topic}' konusunda izleyiciyi ilk 30 saniyede yakalayan, "
-            f"BBC/NatGeo kalitesinde Türkçe belgesel senaryosu yaz. "
+            f"BBC/NatGeo kalitesinde {lang_label} belgesel senaryosu yaz. "
             f"Yaklaşık {scene_count} sahne, toplam {target_duration} saniye."
         ),
         backstory=(
@@ -82,9 +84,9 @@ def create_script_crew(
         description=(
             f"Konu: {topic}\n"
             f"Hedef süre: {target_duration} saniye ({scene_count} sahne)\n\n"
-            "BBC/NatGeo kalitesinde Türkçe belgesel senaryosu yaz.\n"
+            f"BBC/NatGeo kalitesinde {lang_label} belgesel senaryosu yaz.\n"
             "Her sahne için şunları belirt:\n"
-            "- Türkçe anlatım metni (narration)\n"
+            f"- {lang_label} anlatım metni (narration)\n"
             "- İngilizce medya arama anahtar kelimeleri (search_keywords)\n"
             "- Görsel açıklama: ekranda ne gösterilmeli (visual_description)\n"
             "- Duygu tonu: dramatic|peaceful|tense|neutral (mood)\n"
@@ -94,8 +96,8 @@ def create_script_crew(
             "Son sahne güçlü bir kapanışla bitmeli."
         ),
         expected_output=(
-            f"{scene_count} sahnelik Türkçe belgesel senaryosu. "
-            "Her sahne: narration, search_keywords, visual_description, mood, transition, duration_sec."
+            f"{scene_count}-scene {lang_label} documentary script. "
+            "Each scene: narration, search_keywords, visual_description, mood, transition, duration_sec."
         ),
         agent=creator,
     )
@@ -137,7 +139,7 @@ def create_script_crew(
             '  "scenes": [\n'
             '    {\n'
             '      "index": 0,\n'
-            '      "narration": "Türkçe anlatım metni",\n'
+            f'      "narration": "{lang_label} narration text",\n'
             '      "search_keywords": ["english", "keyword"],\n'
             '      "visual_description": "Görselde ne olmalı",\n'
             '      "mood": "dramatic",\n'

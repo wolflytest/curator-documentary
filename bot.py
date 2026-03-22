@@ -11,9 +11,10 @@ import shutil
 from functools import partial
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -29,6 +30,8 @@ from config import (
     SUMMARY_MINUTE,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_USER_ID,
+    TTS_VOICES,
+    VIDEO_DURATIONS,
 )
 
 log = logging.getLogger(__name__)
@@ -297,6 +300,100 @@ async def cmd_sil(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"❌ #{content_id} ID'li kayıt bulunamadı.")
 
 
+def _settings_keyboard(settings: dict) -> InlineKeyboardMarkup:
+    """Kullanıcı ayarları inline klavyesini oluştur."""
+    # Dil satırı
+    lang_row = [
+        InlineKeyboardButton(
+            f"{'✅ ' if settings['language'] == code else ''}  {label}",
+            callback_data=f"lang:{code}",
+        )
+        for label, code in [("🇹🇷 Türkçe", "tr"), ("🇬🇧 İngilizce", "en")]
+    ]
+
+    # Ses satırları
+    voice_rows = []
+    voice_items = list(TTS_VOICES.items())
+    for i in range(0, len(voice_items), 2):
+        row = []
+        for label, code in voice_items[i:i + 2]:
+            row.append(InlineKeyboardButton(
+                f"{'✅ ' if settings['voice'] == code else ''}  {label}",
+                callback_data=f"voice:{code}",
+            ))
+        voice_rows.append(row)
+
+    # Süre satırları
+    dur_rows = []
+    dur_items = list(VIDEO_DURATIONS.items())
+    for i in range(0, len(dur_items), 2):
+        row = []
+        for label, secs in dur_items[i:i + 2]:
+            row.append(InlineKeyboardButton(
+                f"{'✅ ' if settings['duration'] == secs else ''}  {label}",
+                callback_data=f"dur:{secs}",
+            ))
+        dur_rows.append(row)
+
+    return InlineKeyboardMarkup([lang_row] + voice_rows + dur_rows)
+
+
+async def cmd_ayarlar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ayarlar — belgesel üretim ayarlarını inline menüyle değiştirir."""
+    if not _auth(update):
+        return
+    uid = update.effective_user.id
+    settings = db.get_user_settings(uid)
+    voice_label = next((k for k, v in TTS_VOICES.items() if v == settings["voice"]), settings["voice"])
+    dur_label   = next((k for k, v in VIDEO_DURATIONS.items() if v == settings["duration"]), f"{settings['duration']}s")
+    lang_label  = "🇹🇷 Türkçe" if settings["language"] == "tr" else "🇬🇧 İngilizce"
+    await update.message.reply_text(
+        f"⚙️ *Belgesel Ayarları*\n\n"
+        f"🌐 Dil: {lang_label}\n"
+        f"🎙 Ses: {voice_label}\n"
+        f"⏱ Süre: {dur_label}\n\n"
+        f"Aşağıdan değiştirebilirsin:",
+        parse_mode="Markdown",
+        reply_markup=_settings_keyboard(settings),
+    )
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inline buton tıklamalarını işle."""
+    query = update.callback_query
+    if not query or query.from_user.id != TELEGRAM_USER_ID:
+        return
+    await query.answer()
+
+    uid = query.from_user.id
+    settings = db.get_user_settings(uid)
+    data = query.data or ""
+
+    if data.startswith("lang:"):
+        settings["language"] = data.split(":", 1)[1]
+    elif data.startswith("voice:"):
+        settings["voice"] = data.split(":", 1)[1]
+    elif data.startswith("dur:"):
+        settings["duration"] = int(data.split(":", 1)[1])
+    else:
+        return
+
+    db.save_user_settings(uid, settings["language"], settings["voice"], settings["duration"])
+
+    voice_label = next((k for k, v in TTS_VOICES.items() if v == settings["voice"]), settings["voice"])
+    dur_label   = next((k for k, v in VIDEO_DURATIONS.items() if v == settings["duration"]), f"{settings['duration']}s")
+    lang_label  = "🇹🇷 Türkçe" if settings["language"] == "tr" else "🇬🇧 İngilizce"
+    await query.edit_message_text(
+        f"⚙️ *Belgesel Ayarları*\n\n"
+        f"🌐 Dil: {lang_label}\n"
+        f"🎙 Ses: {voice_label}\n"
+        f"⏱ Süre: {dur_label}\n\n"
+        f"Aşağıdan değiştirebilirsin:",
+        parse_mode="Markdown",
+        reply_markup=_settings_keyboard(settings),
+    )
+
+
 async def cmd_belgesel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/belgesel <konu> — belgesel üretim pipeline'ını başlatır."""
     if not _auth(update):
@@ -309,15 +406,26 @@ async def cmd_belgesel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    uid = update.effective_user.id
+    settings = db.get_user_settings(uid)
+    voice_label = next((k for k, v in TTS_VOICES.items() if v == settings["voice"]), settings["voice"])
+    dur_label   = next((k for k, v in VIDEO_DURATIONS.items() if v == settings["duration"]), f"{settings['duration']}s")
+
     msg = await update.message.reply_text(
         f"🎬 Belgesel başlatılıyor: *{topic}*\n"
+        f"🎙 Ses: {voice_label} | ⏱ Süre: {dur_label}\n"
         f"⏳ Bu işlem birkaç dakika sürebilir...",
         parse_mode="Markdown",
     )
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, orchestrator.run_documentary, topic
+            None,
+            orchestrator.run_documentary,
+            topic,
+            settings["duration"],
+            settings["language"],
+            settings["voice"],
         )
         await msg.edit_text(
             f"✅ *{result['title']}*\n"
@@ -385,6 +493,8 @@ def build_application() -> Application:
 
     app.add_handler(CommandHandler("belgesel", cmd_belgesel))
     app.add_handler(CommandHandler("belgeler", cmd_belgeler))
+    app.add_handler(CommandHandler("ayarlar", cmd_ayarlar))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(CommandHandler("ozet", cmd_ozet))
     app.add_handler(CommandHandler("soru", cmd_soru))
     app.add_handler(CommandHandler("istatistik", cmd_istatistik))

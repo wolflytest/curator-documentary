@@ -202,20 +202,27 @@ def _extract_json(raw: str) -> dict:
     raise ValueError("LLM çıktısından JSON çıkarılamadı.")
 
 
-def run_documentary(topic: str, target_duration: int = 600) -> dict:
+def run_documentary(
+    topic: str,
+    target_duration: int = 600,
+    language: str = "tr",
+    voice: str = "af_heart",
+) -> dict:
     """
     Tam belgesel üretim pipeline'ı.
 
     Args:
         topic: Belgesel konusu
         target_duration: Hedef süre (saniye, varsayılan 10 dakika)
+        language: Anlatım dili ('tr' veya 'en')
+        voice: Kokoro TTS ses kodu
 
     Returns:
         dict: {doc_id, title, output_path, scene_count, qa_score, status}
     """
     work_dir = Path(f"/tmp/curator_docs/{int(time.time())}")
     work_dir.mkdir(parents=True, exist_ok=True)
-    log.info("Belgesel başlatılıyor: '%s' (dizin: %s)", topic, work_dir)
+    log.info("Belgesel başlatılıyor: '%s' lang=%s voice=%s (dizin: %s)", topic, language, voice, work_dir)
 
     doc_id = db.create_documentary(topic)
     state = DocumentaryState(doc_id=doc_id, topic=topic)
@@ -223,7 +230,7 @@ def run_documentary(topic: str, target_duration: int = 600) -> dict:
     try:
         # 1. Senaryo
         _update_status(state, "scripting")
-        script_crew, _ = create_script_crew(topic, target_duration)
+        script_crew, _ = create_script_crew(topic, target_duration, language)
         script_result = script_crew.kickoff()
         script_data = _extract_json(script_result.raw)
         state = _apply_script(state, script_data)
@@ -267,7 +274,7 @@ def run_documentary(topic: str, target_duration: int = 600) -> dict:
             tts_result = json.loads(tts_tool._run(json.dumps({
                 "text": scene.narration,
                 "output_path": str(tts_output),
-                "voice": "af_heart",
+                "voice": voice,
                 "speed": 0.95,
             })))
             if tts_result.get("success"):

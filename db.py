@@ -68,6 +68,15 @@ def init_db() -> None:
                 created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id     INTEGER PRIMARY KEY,
+                language    TEXT NOT NULL DEFAULT 'tr',
+                voice       TEXT NOT NULL DEFAULT 'af_heart',
+                duration    INTEGER NOT NULL DEFAULT 300,
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+            )
+        """)
         conn.commit()
     log.info("Veritabanı hazır: %s", DB_PATH)
 
@@ -234,6 +243,36 @@ def list_documentaries(limit: int = 20) -> list[dict]:
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_user_settings(user_id: int) -> dict:
+    """Kullanıcı ayarlarını getir (yoksa varsayılanları döndür)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    if row:
+        return dict(row)
+    return {"user_id": user_id, "language": "tr", "voice": "af_heart", "duration": 300}
+
+
+def save_user_settings(user_id: int, language: str, voice: str, duration: int) -> None:
+    """Kullanıcı ayarlarını kaydet veya güncelle."""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_settings (user_id, language, voice, duration, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                language   = excluded.language,
+                voice      = excluded.voice,
+                duration   = excluded.duration,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, language, voice, duration),
+        )
+        conn.commit()
+    log.info("Kullanıcı #%d ayarları güncellendi: lang=%s voice=%s dur=%d", user_id, language, voice, duration)
 
 
 def get_stats() -> dict:
