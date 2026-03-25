@@ -534,11 +534,8 @@ def synthesize(
                 log.warning("edge_tts başarısız, Kokoro varsayılan sesle devam: %s", result.error)
                 result = _kokoro_tts(text, output_path, "bm_george")
     else:
-        # Türkçe: Kokoro → gTTS
-        result = _kokoro_tts(text, output_path, voice="bf_emma")
-        if not result.success:
-            log.warning("Kokoro başarısız, gTTS'e geçiliyor.")
-            result = _gtts_tts(text, output_path, lang="tr")
+        # Türkçe: doğrudan gTTS (Kokoro İngilizce-only modeldir, Türkçe desteklemez)
+        result = _gtts_tts(text, output_path, lang="tr")
 
     # faster-whisper ile kelime hizalaması (EN + TR)
     if result.success and align_words and not result.word_timestamps:

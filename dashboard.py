@@ -198,23 +198,31 @@ print(json.dumps(result, ensure_ascii=False))
                         result_json = lines[-1]
                         result      = json.loads(result_json)
 
-                        progress_area.progress(100, text="✅ Tamamlandı!")
+                        qa_status = result.get("status", "done")
+                        qa_score  = result.get("qa_score", 0)
 
-                        st.success("🎉 Belgesel hazır!")
+                        if qa_status == "qa_failed":
+                            progress_area.progress(100, text="❌ QA Engeli")
+                            st.error(
+                                f"🚫 **QA Engeli:** Video teslim edilmedi! "
+                                f"Skor: {qa_score:.1f}/10 (minimum 9.0 gerekli)"
+                            )
+                        else:
+                            progress_area.progress(100, text="✅ Tamamlandı!")
+                            st.success("🎉 Belgesel hazır! QA geçti ✅")
 
                         col_a, col_b, col_c = st.columns(3)
                         col_a.metric("🎬 Sahne",    result["scene_count"])
-                        col_b.metric("⭐ QA Skoru", f"{result['qa_score']:.1f}/10")
-                        col_c.metric("📁 Durum",    result["status"].upper())
+                        col_b.metric("⭐ QA Skoru", f"{qa_score:.1f}/10")
+                        col_c.metric("📁 Durum",    qa_status.upper())
 
                         # QA skor rengi
-                        qa_score = result.get("qa_score", 0)
                         if qa_score >= 9.0:
                             st.success(f"✅ QA Skoru: {qa_score:.1f}/10 — Yayın Kalitesi")
                         elif qa_score >= 7.0:
-                            st.warning(f"⚠️ QA Skoru: {qa_score:.1f}/10 — İyileştirme Önerildi")
+                            st.warning(f"⚠️ QA Skoru: {qa_score:.1f}/10 — Revizyon Gerekli (min 9.0)")
                         else:
-                            st.error(f"❌ QA Skoru: {qa_score:.1f}/10 — Revizyon Gerekli")
+                            st.error(f"❌ QA Skoru: {qa_score:.1f}/10 — Video Engellendi (min 9.0)")
 
                         # Skor breakdown
                         breakdown = result.get("score_breakdown", {})
@@ -253,19 +261,22 @@ print(json.dumps(result, ensure_ascii=False))
 
                         st.subheader(f"📹 {result['title']}")
 
-                        output_path = Path(result["output_path"])
-                        if output_path.exists():
-                            st.video(str(output_path))
-                            with open(output_path, "rb") as f:
-                                st.download_button(
-                                    label="⬇️ MP4 İndir",
-                                    data=f,
-                                    file_name=output_path.name,
-                                    mime="video/mp4",
-                                    type="primary",
-                                )
+                        if qa_status == "done":
+                            output_path = Path(result["output_path"])
+                            if output_path.exists():
+                                st.video(str(output_path))
+                                with open(output_path, "rb") as f:
+                                    st.download_button(
+                                        label="⬇️ MP4 İndir",
+                                        data=f,
+                                        file_name=output_path.name,
+                                        mime="video/mp4",
+                                        type="primary",
+                                    )
+                            else:
+                                st.warning(f"Video dosyası bulunamadı: {output_path}")
                         else:
-                            st.warning(f"Video dosyası bulunamadı: {output_path}")
+                            st.info("Video QA'dan geçemedi, teslim edilmedi. Yukarıdaki revizyon önerilerini uygulayın ve tekrar deneyin.")
                     else:
                         progress_area.empty()
                         st.error("❌ Üretim hatası!")
@@ -292,7 +303,8 @@ with tab2:
     else:
         status_icons = {
             "done": "✅", "error": "❌", "pending": "⏳",
-            "scripting": "📝", "searching": "🔍", "assembling": "🎞️", "qa": "🔎",
+            "scripting": "📝", "searching": "🔍", "assembling": "🎞️",
+            "qa": "🔎", "qa_failed": "🚫",
         }
         for row in rows:
             icon = status_icons.get(row["status"], "🔄")

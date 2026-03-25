@@ -369,8 +369,10 @@ def run_documentary(
                 "revision_needed": False, "revision_instructions": "",
             }
 
+        _QA_MIN_SCORE = 9.0
+
         qa_score     = float(qa_data.get("overall_score", 5.0))
-        qa_approved  = qa_data.get("approved", True)
+        qa_approved  = bool(qa_data.get("approved", False))
         qa_breakdown = qa_data.get("score_breakdown", {})
         qa_notes = {
             "viewer":    qa_data.get("viewer_notes", ""),
@@ -380,24 +382,45 @@ def run_documentary(
             "technical": qa_data.get("technical_issues", []),
             "revision":  qa_data.get("revision_instructions", ""),
         }
-        log.info("[#%d] QA: skor=%.1f approved=%s", doc_id, qa_score, qa_approved)
-        if qa_data.get("revision_needed"):
-            log.warning("[#%d] QA revision gerekli: %s", doc_id, qa_data.get("revision_instructions", "")[:200])
+        log.info("[#%d] QA: skor=%.1f approved=%s (min=%.1f)", doc_id, qa_score, qa_approved, _QA_MIN_SCORE)
 
-        # ── 7. Tamamlandı ─────────────────────────────────────────────────
+        # ── QA Engeli: minimum 9.0 ve approved=True olmadan video teslim edilmez ──
+        if qa_score < _QA_MIN_SCORE or not qa_approved:
+            revision_msg = qa_data.get("revision_instructions", "")[:500]
+            log.warning(
+                "[#%d] QA engeli: skor=%.1f (min %.1f), approved=%s\nRevizyon: %s",
+                doc_id, qa_score, _QA_MIN_SCORE, qa_approved, revision_msg,
+            )
+            db.update_documentary_status(
+                doc_id, "qa_failed",
+                error_msg=f"QA skor {qa_score:.1f}/{_QA_MIN_SCORE} | {revision_msg[:200]}",
+            )
+            return {
+                "doc_id":          doc_id,
+                "title":           state.title,
+                "output_path":     str(output_path),
+                "scene_count":     len(state.scenes),
+                "qa_score":        qa_score,
+                "qa_approved":     False,
+                "score_breakdown": qa_breakdown,
+                "qa_notes":        qa_notes,
+                "status":          "qa_failed",
+            }
+
+        # ── 7. Tamamlandı (QA geçti) ──────────────────────────────────────────
         _update_status(state, "done")
         db.update_documentary_status(doc_id, "done", output_path=str(output_path))
 
         return {
-            "doc_id":         doc_id,
-            "title":          state.title,
-            "output_path":    str(output_path),
-            "scene_count":    len(state.scenes),
-            "qa_score":       qa_score,
-            "qa_approved":    qa_approved,
+            "doc_id":          doc_id,
+            "title":           state.title,
+            "output_path":     str(output_path),
+            "scene_count":     len(state.scenes),
+            "qa_score":        qa_score,
+            "qa_approved":     qa_approved,
             "score_breakdown": qa_breakdown,
-            "qa_notes":       qa_notes,
-            "status":         "done",
+            "qa_notes":        qa_notes,
+            "status":          "done",
         }
 
     except Exception as exc:

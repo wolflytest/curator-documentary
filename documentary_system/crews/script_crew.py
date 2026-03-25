@@ -101,32 +101,36 @@ _LANG = {
             "alignment potential. Produce the final JSON output."
         ),
         "critic_backstory":   (
-            "20 yıllık editör. Tarihi hata affetmez. "
-            "BBC World Service kalite standartlarını uygular. "
-            "Çıktı her zaman tam ve geçerli JSON. "
-            "Zayıf bir sahne için 'bu kabul edilemez' der ve yeniden yazılmasını ister. "
-            "Minimum kalite standardı: her sahne görsel-ses uyumlu, her narration canlı ve özgün olmalı."
+            "20-year veteran senior editor at BBC and National Geographic. "
+            "Does not forgive historical inaccuracies or weak narration. "
+            "Enforces BBC World Service quality standards strictly. "
+            "Always outputs complete, valid JSON and nothing else. "
+            "Rewrites weak scenes without hesitation. "
+            "Minimum standard: every scene must have visual-audio harmony and vivid original narration."
         ),
         "creator_task_desc":  (
             "Topic: {topic}\n"
             "Target duration: {target_duration} seconds ({scene_count} scenes)\n\n"
+            "CRITICAL REQUIREMENT: Write ALL narration exclusively in ENGLISH.\n"
+            "Even if the topic name is in another language, every narration field MUST be in English.\n\n"
             "Write a BBC/NatGeo-quality English documentary script.\n"
             "For each scene specify:\n"
-            "- English narration text (narration)\n"
-            "- English media search keywords (search_keywords)\n"
-            "- Visual description: what should be shown on screen (visual_description)\n"
-            "- Emotional tone: dramatic|peaceful|tense|neutral (mood)\n"
-            "- Transition type: fade|cut|dissolve (transition)\n"
-            "- Estimated duration in seconds (duration_sec)\n\n"
-            "First scene: strong hook. Last scene: strong closing."
+            "- narration: English narration text ONLY (never write in Turkish or any other language)\n"
+            "- search_keywords: English media search keywords\n"
+            "- visual_description: what should be shown on screen (English)\n"
+            "- mood: dramatic|peaceful|tense|neutral\n"
+            "- transition: fade|cut|dissolve\n"
+            "- duration_sec: estimated duration in seconds\n\n"
+            "First scene: strong cinematic hook. Last scene: powerful closing."
         ),
         "optimizer_task_desc": (
             "Topic: {topic}\n\n"
+            "CRITICAL: ALL text must remain in English. Do NOT translate or rewrite in any other language.\n\n"
             "Take the English script and optimize:\n"
-            "1. YouTube title — max 60 characters, attention-grabbing, keyword-rich\n"
-            "2. YouTube description — 500 characters, SEO optimized\n"
-            "3. YouTube tags — at least 15 tags\n"
-            "4. Strengthen the first scene's hook\n"
+            "1. YouTube title — max 60 characters, attention-grabbing, keyword-rich (English)\n"
+            "2. YouTube description — 500 characters, SEO optimized (English)\n"
+            "3. YouTube tags — at least 15 tags (English)\n"
+            "4. Strengthen the first scene's hook — make it cinematic and gripping\n"
             "5. Optimize scene durations based on viewer behavior patterns"
         ),
         "narration_example":  "English narration text here",
@@ -206,9 +210,17 @@ def create_script_crew(
     )
 
     # ── Task 3: Kalite kontrolü + Final JSON ─────────────────────────────────
+    _lang_enforcement = (
+        "CRITICAL LANGUAGE RULE: Every 'narration' field MUST be written in "
+        f"{L['narration_lang']} ONLY. "
+        "If any narration is not in the correct language, rewrite it before outputting JSON.\n\n"
+    ) if language == "en" else (
+        "KRİTİK DİL KURALI: Her 'narration' alanı YALNIZCA Türkçe olmalıdır.\n\n"
+    )
     critic_task = Task(
         description=(
             f"Topic: {topic}\n\n"
+            + _lang_enforcement +
             "Review the scriptwriter's and optimizer's work. "
             "Check historical accuracy, narrative flow, and visual alignment.\n\n"
             "OUTPUT FORMAT — valid JSON only, nothing else:\n"
