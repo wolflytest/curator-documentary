@@ -519,19 +519,30 @@ def synthesize(
             result = _run_edge_tts(text, "en-GB-RyanNeural", output_path)
 
     elif language == "en":
-        # Kokoro ses kodu mu (bm_, am_, bf_, af_ ile başlar)?
+        # Kokoro ses kodu → edge_tts eşdeğerine çevir, önce edge_tts dene
+        _KOKORO_TO_EDGE = {
+            "bm_george":  "en-GB-RyanNeural",
+            "bm_daniel":  "en-GB-ThomasNeural",
+            "bm_lewis":   "en-GB-RyanNeural",
+            "am_michael": "en-US-GuyNeural",
+            "am_liam":    "en-US-ChristopherNeural",
+            "bf_emma":    "en-GB-SoniaNeural",
+            "af_bella":   "en-US-JennyNeural",
+            "af_nova":    "en-US-AriaNeural",
+        }
         _is_kokoro = any(voice.startswith(p) for p in ("bm_", "am_", "bf_", "af_"))
         if _is_kokoro:
-            # Önce Kokoro dene (doğru ses kodu ile)
-            result = _kokoro_tts(text, output_path, voice)
+            # edge_tts birincil, Kokoro fallback
+            edge_voice = _KOKORO_TO_EDGE.get(voice, "en-GB-RyanNeural")
+            result = _run_edge_tts(text, edge_voice, output_path)
             if not result.success:
-                log.warning("Kokoro başarısız, edge_tts varsayılan sesle devam: %s", result.error)
-                result = _run_edge_tts(text, "en-GB-RyanNeural", output_path)
+                log.warning("edge_tts başarısız (%s), Kokoro fallback: %s", edge_voice, result.error)
+                result = _kokoro_tts(text, output_path, voice)
         else:
-            # edge_tts ses kodu (en-GB-RyanNeural gibi)
+            # Zaten edge_tts ses kodu (en-GB-RyanNeural gibi)
             result = _run_edge_tts(text, voice, output_path)
             if not result.success:
-                log.warning("edge_tts başarısız, Kokoro varsayılan sesle devam: %s", result.error)
+                log.warning("edge_tts başarısız, Kokoro fallback: %s", result.error)
                 result = _kokoro_tts(text, output_path, "bm_george")
     else:
         # Türkçe: doğrudan gTTS (Kokoro İngilizce-only modeldir, Türkçe desteklemez)
