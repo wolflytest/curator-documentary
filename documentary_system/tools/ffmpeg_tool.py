@@ -68,7 +68,8 @@ class FFmpegTool(BaseTool):
 
         try:
             if proc_type == "ken_burns":
-                self._ken_burns(input_path, output_path, duration, zoom_direction, video_aspect)
+                mood = data.get("mood", "neutral")
+                self._ken_burns(input_path, output_path, duration, zoom_direction, video_aspect, mood)
             elif proc_type == "clip":
                 self._clip(input_path, output_path, duration, data, video_aspect)
             elif proc_type == "subtitle":
@@ -111,6 +112,7 @@ class FFmpegTool(BaseTool):
         duration: float,
         zoom_direction: str,
         video_aspect: str = "16:9",
+        mood: str = "neutral",
     ) -> None:
         """Fotoğrafa düzgün Ken Burns efekti uygula (titreme önlendi)."""
         fps = 25
@@ -122,8 +124,14 @@ class FFmpegTool(BaseTool):
         else:
             zoom_expr = "if(eq(on,1),1.3,zoom-0.0005)"
 
-        x_expr = "iw/2-(iw/zoom/2)"
-        y_expr = "ih/2-(ih/zoom/2)"
+        # Mood-to-motion: sahne mood'una göre pan yönü
+        _pan = {
+            "dramatic":  ("iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),          # merkez zoom
+            "tense":     ("iw*0.3-(iw/zoom/2)", "ih*0.3-(ih/zoom/2)"),       # sol üst → merkez
+            "peaceful":  ("iw*0.6-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),         # yavaş sağdan sola
+            "neutral":   ("iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),           # merkez
+        }
+        x_expr, y_expr = _pan.get(mood, _pan["neutral"])
 
         # Önce görseli büyüt, sonra zoompan uygula (titreme önlemi)
         vf = (
@@ -235,9 +243,11 @@ class FFmpegTool(BaseTool):
         # ffmpeg subtitles filtresi için path'i escape et
         escaped = str(srt_path).replace("\\", "/").replace(":", "\\\\:")
         style = (
-            f"FontSize=22,Alignment=2,"
-            f"PrimaryColour={ass_color},BackColour=&H80000000,"
-            f"BorderStyle=3,Outline=1,Shadow=0,MarginV=20"
+            f"FontSize=38,Alignment=2,"
+            f"PrimaryColour={ass_color},SecondaryColour=&H00FFFFFF,"
+            f"BackColour=&H40000000,BorderStyle=1,"
+            f"Outline=2,Shadow=1,MarginV=30,"
+            f"Fontname=Arial,Bold=1"
         )
 
         subprocess.run(

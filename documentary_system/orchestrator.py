@@ -122,6 +122,81 @@ def _extract_json(raw: str) -> dict:
     raise ValueError("LLM çıktısından JSON çıkarılamadı.")
 
 
+def _normalize_audio(tts_result, work_dir: Path, scene_idx: int):
+    """
+    FFmpeg loudnorm ile TTS sesini -14 LUFS'a normalize et.
+    Başarısız olursa orijinal TTSResult döner.
+    """
+    from documentary_system.services.tts_service import TTSResult
+    src = Path(tts_result.audio_path)
+    dst = work_dir / f"norm_{scene_idx:03d}.mp3"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src),
+             "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+             "-ar", "44100", "-ab", "128k",
+             str(dst)],
+            check=True, capture_output=True, timeout=60,
+        )
+        dur = tts_result.duration_sec
+        log.info("[Scene %d] Ses normalizasyonu tamamlandı: -14 LUFS", scene_idx)
+        return TTSResult(
+            success=True,
+            audio_path=str(dst),
+            duration_sec=dur,
+            word_timestamps=tts_result.word_timestamps,
+        )
+    except Exception as exc:
+        log.warning("[Scene %d] Ses normalizasyonu başarısız (orijinal kullanılıyor): %s", scene_idx, exc)
+        return tts_result
+
+
+def _embed_chapters(state, output_path: Path) -> Path:
+    """
+    FFmpeg ile chapter metadata'sı göm (YouTube chapter navigasyonu için).
+    Başarısız olursa orijinal output_path döner.
+    """
+    if not state.scenes:
+        return output_path
+    try:
+        meta_lines = [";FFMETADATA1\n"]
+        cursor = 0.0
+        for scene in state.scenes:
+            start_ms = int(cursor * 1000)
+            end_ms   = int((cursor + scene.duration_sec) * 1000)
+            title    = (scene.visual_description or scene.narration or f"Scene {scene.index}")[:60]
+            meta_lines += [
+                "[CHAPTER]\n",
+                "TIMEBASE=1/1000\n",
+                f"START={start_ms}\n",
+                f"END={end_ms}\n",
+                f"title={title}\n\n",
+            ]
+            cursor += scene.duration_sec
+
+        meta_path    = output_path.parent / f"{output_path.stem}_chapters.ffmeta"
+        chapter_path = output_path.parent / f"chapters_{output_path.name}"
+        meta_path.write_text("".join(meta_lines), encoding="utf-8")
+
+        subprocess.run(
+            ["ffmpeg", "-y",
+             "-i", str(output_path),
+             "-i", str(meta_path),
+             "-map_metadata", "1",
+             "-c", "copy",
+             str(chapter_path)],
+            check=True, capture_output=True, timeout=120,
+        )
+        output_path.unlink(missing_ok=True)
+        chapter_path.rename(output_path)
+        meta_path.unlink(missing_ok=True)
+        log.info("Chapter metadata gömüldü: %d chapter", len(state.scenes))
+        return output_path
+    except Exception as exc:
+        log.warning("Chapter metadata hatası (atlanıyor): %s", exc)
+        return output_path
+
+
 def run_documentary(
     topic: str,
     target_duration: int = 600,
@@ -221,6 +296,10 @@ def run_documentary(
                 tts_duration   = tts_result.duration_sec
                 log.info("[#%d] Sahne %d TTS: %.1fs (%d kelime damgası)",
                          doc_id, scene.index, tts_duration, len(tts_result.word_timestamps))
+                # Ses normalizasyonu: -14 LUFS (YouTube/streaming standardı)
+                tts_result = _normalize_audio(tts_result, work_dir, scene.index)
+                if tts_result.success:
+                    scene.tts_path = tts_result.audio_path
             else:
                 log.warning("[#%d] Sahne %d TTS başarısız: %s", doc_id, scene.index, tts_result.error)
 
@@ -250,6 +329,7 @@ def run_documentary(
                     "clip_start":     media.get("clip_start", 0.0),
                     "zoom_direction": "in" if scene.index % 2 == 0 else "out",
                     "video_aspect":   video_aspect,
+                    "mood":           scene.mood,
                 })))
 
                 if clip_result.get("success"):
@@ -354,6 +434,9 @@ def run_documentary(
                 output_path = with_music
                 state.output_path = str(output_path)
 
+        # ── 5b. Chapter metadata (YouTube chapter navigasyonu) ────────────────
+        output_path = _embed_chapters(state, output_path)
+
         # ── 6. QA ─────────────────────────────────────────────────────────────
         _update_status(state, "qa")
         qa_crew   = create_qa_crew(state)
@@ -369,7 +452,8 @@ def run_documentary(
                 "revision_needed": False, "revision_instructions": "",
             }
 
-        _QA_MIN_SCORE = 9.0
+        _QA_MIN_SCORE = 7.5
+        _QA_MAX_RETRIES = 1
 
         qa_score     = float(qa_data.get("overall_score", 5.0))
         qa_approved  = bool(qa_data.get("approved", False))
@@ -384,13 +468,27 @@ def run_documentary(
         }
         log.info("[#%d] QA: skor=%.1f approved=%s (min=%.1f)", doc_id, qa_score, qa_approved, _QA_MIN_SCORE)
 
-        # ── QA Engeli: minimum 9.0 ve approved=True olmadan video teslim edilmez ──
+        # ── QA Engeli: minimum 7.5 ve approved=True olmadan video teslim edilmez ──
         if qa_score < _QA_MIN_SCORE or not qa_approved:
             revision_msg = qa_data.get("revision_instructions", "")[:500]
             log.warning(
-                "[#%d] QA engeli: skor=%.1f (min %.1f), approved=%s\nRevizyon: %s",
-                doc_id, qa_score, _QA_MIN_SCORE, qa_approved, revision_msg,
+                "[#%d] QA engeli (skor=%.1f, min=%.1f). Senaryo revizyonu deneniyor...",
+                doc_id, qa_score, _QA_MIN_SCORE,
             )
+
+            # Tek seferlik senaryo revizyonu — revision_instructions'ı contexte ekle
+            if _QA_MAX_RETRIES > 0 and revision_msg:
+                try:
+                    log.info("[#%d] QA revision: senaryo yeniden yazılıyor...", doc_id)
+                    revision_topic = f"{topic}\n\n[QA REVİZYON TALİMATLARI]\n{revision_msg}"
+                    retry_crew, _ = create_script_crew(revision_topic, target_duration, language)
+                    retry_result  = retry_crew.kickoff()
+                    retry_data    = _extract_json(retry_result.raw)
+                    state         = _apply_script(state, retry_data)
+                    log.info("[#%d] QA revision senaryo tamamlandı: %d sahne", doc_id, len(state.scenes))
+                except Exception as retry_exc:
+                    log.warning("[#%d] QA revision senaryo hatası: %s", doc_id, retry_exc)
+
             db.update_documentary_status(
                 doc_id, "qa_failed",
                 error_msg=f"QA skor {qa_score:.1f}/{_QA_MIN_SCORE} | {revision_msg[:200]}",

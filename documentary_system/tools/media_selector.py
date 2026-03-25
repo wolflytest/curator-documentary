@@ -93,11 +93,17 @@ def _generate_with_pollinations(scene: SceneState, state: DocumentaryState) -> d
         keywords = ", ".join(scene.search_keywords or [])
 
         if visual_desc:
-            prompt = f"documentary photo, {visual_desc}, {keywords}, photorealistic, high quality, cinematic"
+            prompt = (
+                f"historical documentary photograph, {visual_desc}, {keywords}, "
+                f"shot at eye level, cinematic lighting, rule of thirds composition, "
+                f"photorealistic, ultra detailed, professional photography, no text overlay"
+            )
         else:
-            # Narration'dan kısa bir görsel prompt çıkar
-            narration_short = (scene.narration or "")[:150]
-            prompt = f"documentary photo, {narration_short}, {keywords}, photorealistic, cinematic"
+            narration_short = (scene.narration or "")[:100]
+            prompt = (
+                f"historical documentary photograph, {narration_short}, {keywords}, "
+                f"cinematic composition, natural lighting, photorealistic, professional photography"
+            )
 
         # Aspect ratio'ya göre çözünürlük
         video_aspect = getattr(state, "video_aspect", "16:9") or "16:9"

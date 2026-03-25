@@ -48,12 +48,17 @@ def generate_image(
 
     # URL oluştur
     encoded_prompt = urllib.parse.quote(prompt)
+    _NEGATIVE = (
+        "cartoon,illustration,anime,painting,drawing,text,watermark,logo,"
+        "low quality,blurry,distorted,oversaturated,fake,cgi,3d render"
+    )
     params = [
         f"width={width}",
         f"height={height}",
         f"model={model}",
         "nologo=true",
         "enhance=false",
+        f"negative_prompt={urllib.parse.quote(_NEGATIVE)}",
     ]
     if seed is not None:
         params.append(f"seed={seed}")
